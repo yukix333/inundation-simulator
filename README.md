@@ -1,29 +1,34 @@
-# Inundation Simulator
+# 浸水予測シミュレーター
 
-Browser-based 2D/3D flood depth visualization using DEM tiles from GSI and rainfall data.
+国土地理院の標高タイル（DEM）と降雨データを使い、ブラウザ上で浸水深を2D/3D表示するツールです。
 
-## Quick Start
+## 使い方
 
-1. Open [`inundation-simulator-v001.html`](inundation-simulator-v001.html) in a web browser
-2. Zoom the map to level 13+ and navigate to your target area → terrain data loads automatically
-3. Enter rainfall manually, or click "雨雲データを取得" to fetch JMA radar data
-4. Select "簡易水位法" (instant) or "水流シミュレーション" (animated), then click "予測を実行"
-5. View results in 2D map and/or 3D visualization
+1. [`inundation-simulator-v001.html`](inundation-simulator-v001.html) をブラウザで開く
+2. 地図をズーム13以上にして対象地域を表示する → 表示範囲の地形データが自動で読み込まれます
+3. 雨量を手入力するか、「雨雲データを取得」で気象庁のレーダー実況を取り込む
+4. 「簡易水位法」（即時）か「水流シミュレーション」（アニメーション）を選び、「予測を実行」を押す
+5. 結果を2Dの地図、または3D表示で確認する
 
-**Note:** Geolocation API requires HTTPS or localhost. For full features, open via GitHub Pages at https://yukix333.github.io/inundation-simulator/
+**スマホでの操作:** 「操作パネル」のバーをタップすると操作部分を畳めます。バーを上下（横向きのときは左右）に
+ドラッグすると、パネルの大きさを自由に変えられます。「1. 対象エリア」などの見出しをタップすると、
+そのセクションだけを畳めます。
 
-## Features
+**注意:** 現在地の取得（Geolocation API）にはHTTPSまたはlocalhostが必要です。全機能を使うには
+GitHub Pages（https://yukix333.github.io/inundation-simulator/ ）から開いてください。
 
-- Single HTML file, no build or server required
-- Manning-based flow calculation with 2D/3D visualization
-- Direct watershed-fill solver for instant results
-- Water volume conservation tracking
-- Responsive mobile/desktop layout
-- Real-time JMA radar data integration
+## 特徴
 
-## Repository
+- 単一のHTMLファイルで動作。ビルドもサーバーも不要
+- マニング式による流下計算と、2D/3Dの可視化
+- 窪地充填を直接解く方式による即時計算
+- 水収支（水量保存）の追跡
+- 画面に合わせたレイアウト。スマホでは地図が全画面になり、操作はその上に重なる開閉・サイズ可変の
+  スライド式パネルで行います（畳んでも実行中・実行済みのシミュレーションは消えません）
+- 気象庁の雨雲レーダー（降水ナウキャスト）との連携
+
+## リポジトリ
 
 - **GitHub:** https://github.com/yukix333/inundation-simulator
-- **Status:** Public
-- **License:** See LICENSE (if present)
-
+- **公開状態:** Public
+- **ライセンス:** LICENSE ファイルを参照（存在する場合）
