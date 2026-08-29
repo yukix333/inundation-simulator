@@ -691,6 +691,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
 
   #panel{width:320px;flex:none;background:var(--panel-bg);border-left:1px solid var(--border);
     display:flex;flex-direction:column;overflow-y:auto}
+  /* パネルの開閉つまみは凡例と同じ考え方で、スマホ幅でのみ出す。つまみが無い画面幅では
+     collapsed が付いていても中身を隠してはならない(開く手段が無くなるため)。 */
+  #panelToggle{display:none}
+  #panelBody{flex:none}
   #panel header{padding:14px 16px 10px;border-bottom:1px solid var(--border)}
   #panel h1{font-size:16px;margin:0 0 2px}
   #panel header p{margin:0;font-size:11px;color:var(--muted)}
@@ -733,13 +737,22 @@ svg.leaflet-image-layer.leaflet-interactive path {
     background:rgba(255,255,255,.95);border:1px solid var(--border);border-radius:10px;
     padding:16px 22px;font-size:13px;display:none;box-shadow:0 4px 16px rgba(0,0,0,.15)}
 
-  /* スマホ: 地図を上、縦スクロール可能な操作パネルを下に配置する。 */
+  /* スマホ: 地図を画面いっぱいに置き、操作パネルはその上に重ねるスライド式にする。
+     パネルを重ねる形にしておくと、開閉しても #mapwrap の大きさが変わらない。地図のサイズが
+     変わるとLeafletがmoveendを飛ばし、地形の自動取得(captureTerrain)が走って計算結果が
+     消えてしまうため、これは表示上の都合ではなく計算を守るための構造。
+     地形の取得範囲は地図の表示範囲=画面全体なので、パネルの裏側まで計算対象に入る。 */
   @media (max-width:700px){
     html,body{height:100vh;height:100dvh;overflow:hidden}
-    #app{height:100vh;height:100dvh;flex-direction:column}
-    #mapwrap{flex:0 0 48vh;flex-basis:48dvh;min-height:250px}
-    #panel{width:100%;height:52vh;height:52dvh;border-left:0;border-top:1px solid var(--border);
-      overflow-y:auto;-webkit-overflow-scrolling:touch;padding-bottom:max(8px, env(safe-area-inset-bottom))}
+    #app{height:100vh;height:100dvh;flex-direction:column;position:relative}
+    #mapwrap{flex:1 1 auto;min-height:0}
+    #panel{position:absolute;left:0;right:0;bottom:0;z-index:1000;width:100%;
+      height:var(--panel-h, 52dvh);max-height:85dvh;border-left:0;border-top:1px solid var(--border);
+      overflow-y:auto;-webkit-overflow-scrolling:touch;padding-bottom:0;
+      box-shadow:0 -3px 14px rgba(0,0,0,.16);transition:height .18s ease, width .18s ease}
+    /* ドラッグ中はアニメーションを切り、指の動きにそのまま追従させる */
+    #app.panel-dragging #panel{transition:none}
+    #panelBody{padding-bottom:max(8px, env(safe-area-inset-bottom))}
     #panel header{padding:10px 14px 8px}
     #panel h1{font-size:15px}
     #panel header p{font-size:10px}
@@ -750,9 +763,33 @@ svg.leaflet-image-layer.leaflet-interactive path {
     button,select{min-height:40px}
     .btnrow{gap:7px}
     .modes button{min-height:40px;padding:7px 4px}
+    /* パネル全体の開閉つまみ。タップで開閉、上下(横向きでは左右)にドラッグすると大きさを変えられる。
+       ドラッグを拾うため touch-action は切る。スクロールしても消えないよう上端に貼り付けておく。 */
+    #panelToggle{display:flex;align-items:center;justify-content:space-between;gap:8px;
+      width:100%;height:48px;min-height:48px;padding:8px 14px;border:0;
+      border-bottom:1px solid var(--border);border-radius:0;background:var(--panel-bg);
+      font-size:13px;font-weight:600;text-align:left;cursor:grab;touch-action:none;
+      position:sticky;top:0;z-index:5}
+    #app.panel-dragging #panelToggle{cursor:grabbing}
+    #panelToggle::after{content:"▾";font-size:11px;color:var(--muted)}
+    #app.panel-collapsed #panelToggle::after{content:"▸"}
+    #app.panel-collapsed #panel{height:calc(48px + env(safe-area-inset-bottom));
+      padding-bottom:env(safe-area-inset-bottom);overflow:hidden}
+    #app.panel-collapsed #panelBody{display:none}
+    /* セクション単位の開閉。見出しをタップすると中身だけを畳み、縦スクロール量を減らせる。 */
+    .sec h2{display:flex;align-items:center;justify-content:space-between;gap:8px;
+      min-height:40px;margin:0 0 7px;cursor:pointer;-webkit-user-select:none;user-select:none}
+    .sec h2::after{content:"▾";font-size:11px}
+    .sec.collapsed h2{margin:0}
+    .sec.collapsed h2::after{content:"▸"}
+    .sec.collapsed > *:not(h2){display:none}
+    .sec.collapsed{padding-top:4px;padding-bottom:4px}
     input[type=range]{min-height:34px}
-    #legend{left:6px;bottom:6px;max-width:calc(100% - 12px);max-height:48%;overflow-y:auto;
-      padding:7px 9px;font-size:10px}
+    /* 凡例と地図クレジットは、重なったパネルの分だけ内側へ寄せる(実寸はJSが変数で配る) */
+    #legend{left:6px;bottom:calc(var(--panel-vis-y, 0px) + 6px);max-width:calc(100% - 12px);
+      max-height:48%;overflow-y:auto;padding:7px 9px;font-size:10px}
+    .leaflet-bottom{margin-bottom:var(--panel-vis-y, 0px)}
+    .leaflet-right{margin-right:var(--panel-vis-x, 0px)}
     #legend h3{font-size:10px}
     .lg i{width:15px;height:10px}
     /* スマホでは既定で畳んでおき、「凡例」をタップしたときだけ開く */
@@ -771,11 +808,18 @@ svg.leaflet-image-layer.leaflet-interactive path {
     .leaflet-left .leaflet-control{margin-left:6px}
   }
 
-  /* 横向きでは地図の操作面積を優先し、パネルを右側に戻す。 */
+  /* 横向きも同じ考え方で、右から重ねるスライドパネルにする。 */
   @media (max-width:700px) and (orientation:landscape){
     #app{flex-direction:row}
     #mapwrap{flex:1 1 auto;min-height:0}
-    #panel{width:300px;height:100vh;height:100dvh;border-top:0;border-left:1px solid var(--border)}
+    #panel{top:0;bottom:0;left:auto;right:0;width:var(--panel-w, 300px);max-width:80vw;
+      height:100vh;height:100dvh;max-height:none;border-top:0;border-left:1px solid var(--border);
+      box-shadow:-3px 0 14px rgba(0,0,0,.16)}
+    /* 畳むときは幅を縮めて、縦書きのつまみだけを残す。 */
+    #app.panel-collapsed #panel{width:48px;height:100vh;height:100dvh;padding-bottom:0}
+    #app.panel-collapsed #panelToggle{writing-mode:vertical-rl;width:100%;height:100%;
+      min-width:48px;padding:14px 8px;justify-content:flex-start;border-bottom:0;
+      border-left:1px solid var(--border);position:static}
   }
 </style>
 </head>
@@ -814,6 +858,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
   </div>
 
   <div id="panel">
+    <!-- スマホでは地図が狭いので、操作パネルごと畳めるようにする。畳む指定はCSSのスマホ幅にしか
+         無いので、広い画面ではつまみ自体が出ず、クラスが残っていてもパネルは開いたまま。 -->
+    <button id="panelToggle" type="button" aria-expanded="true" aria-controls="panelBody">操作パネル</button>
+    <div id="panelBody">
     <header>
       <h1>浸水予測シミュレーター</h1>
       <p>地形データ: 国土地理院 標高タイル（5m DEM優先）</p>
@@ -1017,6 +1065,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
 
     <div class="sec" style="border-bottom:none">
       <p class="hint">※ 本アプリは地形（標高）に基づく簡易的な予測です。下水道は全域一律の簡易モデルで、実際の管網配置・ポンプ場・河川の氾濫・建物は考慮していません。実際の防災判断には自治体のハザードマップを利用してください。</p>
+    </div>
     </div>
   </div>
 </div>
@@ -2174,8 +2223,20 @@ const rrimLayer = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/sekishoku/{z
   maxNativeZoom: 14, maxZoom: 18, opacity: 0.6, crossOrigin: 'anonymous'
 });
 
-// コンテナが後からサイズ変更されても地図を追従させる
-new ResizeObserver(() => map.invalidateSize()).observe(document.getElementById('mapwrap'));
+// コンテナが後からサイズ変更されても地図と3D表示を追従させる
+// (画面の回転やブラウザUIの伸縮で #mapwrap の高さ・幅が変わるため、3Dのレンダラも貼り直す)
+new ResizeObserver(() => {
+  map.invalidateSize();
+  if (three){
+    const wrap = document.getElementById('mapwrap');
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+    if (W > 0 && H > 0){
+      three.renderer.setSize(W, H);
+      three.camera.aspect = W / H;
+      three.camera.updateProjectionMatrix();
+    }
+  }
+}).observe(document.getElementById('mapwrap'));
 
 /* ================= 状態 ================= */
 const DEM_Z = 15;              // 標高タイルのズーム(z15 = 5m DEM)
@@ -3217,6 +3278,102 @@ $('legendToggle').addEventListener('click', () => {
   const collapsed = $('legend').classList.toggle('collapsed');
   $('legendToggle').setAttribute('aria-expanded', String(!collapsed));
 });
+
+/* 操作パネルは地図の上に重ねたスライド式。つまみをタップで開閉、上下(横向きでは左右)に
+   ドラッグして大きさを自由に変えられる。既定は開いた状態。
+   パネルは地図に重ねてあるので、開閉しても #mapwrap の大きさは変わらない。つまりLeafletの
+   moveendが飛ばず、地形の自動取得(captureTerrain)も走らないので、計算中の水も計算結果も
+   そのまま残る。広い画面では畳む指定がCSSで無効なので、クラスが残っていても影響しない。 */
+const panelEl = $('panel'), appEl = $('app'), panelToggleEl = $('panelToggle');
+const isMobileLayout  = () => window.matchMedia('(max-width:700px)').matches;
+const isPanelSideways = () => window.matchMedia('(max-width:700px) and (orientation:landscape)').matches;
+
+// 凡例と地図クレジットがパネルに隠れないよう、実際のパネルの大きさをCSS変数で配る。
+// パネル自身のResizeObserverで拾うので、開閉・ドラッグ・画面回転のどれでも追従する。
+function syncPanelMetrics(){
+  const sideways = isPanelSideways();
+  appEl.style.setProperty('--panel-vis-y', sideways ? '0px' : panelEl.offsetHeight + 'px');
+  appEl.style.setProperty('--panel-vis-x', sideways ? panelEl.offsetWidth + 'px' : '0px');
+}
+new ResizeObserver(syncPanelMetrics).observe(panelEl);
+window.addEventListener('orientationchange', syncPanelMetrics);
+
+const PANEL_BAR_PX = 48;   // CSSの #panelToggle の高さ(=畳んだときの大きさ)と合わせる
+
+// ドラッグでつまみの大きさまで縮めてから開くと中身が見えないので、既定の大きさに戻す
+function ensureUsablePanelSize(){
+  const key = isPanelSideways() ? '--panel-w' : '--panel-h';
+  const cur = parseFloat(appEl.style.getPropertyValue(key));
+  if (cur && cur <= PANEL_BAR_PX + 24) appEl.style.removeProperty(key);
+}
+
+function setPanelCollapsed(collapsed){
+  if (!collapsed) ensureUsablePanelSize();
+  appEl.classList.toggle('panel-collapsed', collapsed);
+  panelToggleEl.setAttribute('aria-expanded', String(!collapsed));
+}
+
+// つまみのドラッグでパネルの大きさを変える。指の震え程度(6px未満)は動かさず、タップとして扱う。
+let panelDrag = null, panelDragEnded = false;
+panelToggleEl.addEventListener('pointerdown', ev => {
+  // タッチのドラッグ後はclickが飛んでこないことがあるので、次の操作の頭で必ず戻す
+  panelDragEnded = false;
+  if (!isMobileLayout() || (ev.pointerType === 'mouse' && ev.button !== 0)) return;
+  const sideways = isPanelSideways();
+  panelDrag = {id: ev.pointerId, sideways, x: ev.clientX, y: ev.clientY, moved: false,
+               size: sideways ? panelEl.offsetWidth  : panelEl.offsetHeight,
+               min:  PANEL_BAR_PX};
+  try { panelToggleEl.setPointerCapture(ev.pointerId); } catch(e){}
+});
+window.addEventListener('pointermove', ev => {
+  if (!panelDrag || ev.pointerId !== panelDrag.id) return;
+  const d = panelDrag.sideways ? (panelDrag.x - ev.clientX) : (panelDrag.y - ev.clientY);
+  if (!panelDrag.moved){
+    if (Math.abs(d) < 6) return;
+    panelDrag.moved = true;
+    appEl.classList.add('panel-dragging');
+  }
+  // 上限は画面の85%(横向きは80%)。下限はつまみの高さで、それ以上は縮まない。
+  const limit = panelDrag.sideways ? window.innerWidth * 0.8 : window.innerHeight * 0.85;
+  const size = Math.max(panelDrag.min, Math.min(Math.round(limit), panelDrag.size + d));
+  panelDrag.last = size;
+  appEl.classList.remove('panel-collapsed');   // 引き上げたら開く(大きさはこの直後に指の位置で決める)
+  panelToggleEl.setAttribute('aria-expanded', 'true');
+  appEl.style.setProperty(panelDrag.sideways ? '--panel-w' : '--panel-h', size + 'px');
+});
+function endPanelDrag(){
+  if (!panelDrag) return;
+  const {moved, min, last} = panelDrag;
+  panelDrag = null;
+  appEl.classList.remove('panel-dragging');
+  if (!moved) return;                 // 動かしていなければ、続けて飛んでくるclickで開閉する
+  panelDragEnded = true;              // ドラッグ直後のclickは開閉として扱わない
+  // 実寸はアニメーション途中の値になり得るので、ドラッグで決めた値で判定する
+  if (last <= min + 24) setPanelCollapsed(true);   // つまみの近くまで縮めたら畳む
+}
+window.addEventListener('pointerup', endPanelDrag);
+window.addEventListener('pointercancel', endPanelDrag);
+panelToggleEl.addEventListener('click', () => {
+  if (panelDragEnded){ panelDragEnded = false; return; }
+  setPanelCollapsed(!appEl.classList.contains('panel-collapsed'));
+});
+
+/* セクション単位の開閉。見出し自体をボタンとして扱い、使わない項目を畳んで縦スクロールを減らす。
+   キーボード操作でも開閉できるよう、Enter/Spaceを拾っておく。 */
+for (const h2 of document.querySelectorAll('#panelBody .sec > h2')){
+  const sec = h2.parentElement;
+  h2.setAttribute('role', 'button');
+  h2.setAttribute('tabindex', '0');
+  h2.setAttribute('aria-expanded', 'true');
+  const toggleSec = () => {
+    const collapsed = sec.classList.toggle('collapsed');
+    h2.setAttribute('aria-expanded', String(!collapsed));
+  };
+  h2.addEventListener('click', toggleSec);
+  h2.addEventListener('keydown', ev => {
+    if (ev.key === 'Enter' || ev.key === ' '){ ev.preventDefault(); toggleSec(); }
+  });
+}
 
 function updateLegend(){
   const showRain = !!radarLayer;
