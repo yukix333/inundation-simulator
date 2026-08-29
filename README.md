@@ -4,9 +4,13 @@ Browser-based 2D/3D flood depth visualization using DEM tiles from GSI and rainf
 
 ## Quick Start
 
-Open [`inundation-simulator-v001.html`](inundation-simulator-v001.html) in a web browser. Zoom to level 13+, click "この範囲で地形取得" to load DEM, input or fetch rainfall, and visualize flooding.
+1. Open [`inundation-simulator-v001.html`](inundation-simulator-v001.html) in a web browser
+2. Zoom the map to level 13+ and navigate to your target area → terrain data loads automatically
+3. Enter rainfall manually, or click "雨雲データを取得" to fetch JMA radar data
+4. Select "簡易水位法" (instant) or "水流シミュレーション" (animated), then click "予測を実行"
+5. View results in 2D map and/or 3D visualization
 
-**Note:** Position data (Geolocation API) requires HTTPS or localhost; open via GitHub Pages at https://yukix333.github.io/inundation-simulator/ to use it.
+**Note:** Geolocation API requires HTTPS or localhost. For full features, open via GitHub Pages at https://yukix333.github.io/inundation-simulator/
 
 ## Features
 
@@ -15,6 +19,7 @@ Open [`inundation-simulator-v001.html`](inundation-simulator-v001.html) in a web
 - Direct watershed-fill solver for instant results
 - Water volume conservation tracking
 - Responsive mobile/desktop layout
+- Real-time JMA radar data integration
 
 ## Repository
 
