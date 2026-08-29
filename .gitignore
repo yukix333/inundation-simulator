@@ -1,0 +1,14 @@
+# バックアップ・一時ファイル（履歴はGitが持つので不要）
+*.bak
+*.tmp
+*~
+
+# OS / エディタ
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+
+# ローカル作業用
+scratch/
