@@ -1,44 +1,24 @@
-# 浸水予測シミュレーター
+# Inundation Simulator
 
-ブラウザだけで動く単一 HTML の浸水シミュレーターです。国土地理院の標高タイルから
-対象範囲の DEM を取得し、手入力または気象庁の高解像度降水ナウキャストを降雨として
-与え、2D と 3D で浸水深を表示します。
+Browser-based 2D/3D flood depth visualization using DEM tiles from GSI and rainfall data.
 
-サーバーもビルドも不要で、HTML ファイルを開くだけで動きます。
+## Quick Start
 
-## ファイル構成
+Open [`inundation-simulator-v001.html`](inundation-simulator-v001.html) in a web browser. Zoom to level 13+, click "この範囲で地形取得" to load DEM, input or fetch rainfall, and visualize flooding.
 
-| ファイル | 内容 |
-| --- | --- |
-| [`浸水予測シミュレーター_Phase8_流動安定化.html`](浸水予測シミュレーター_Phase8_流動安定化.html) | 本体。これ1枚で完結 |
-| [`引継ぎ資料_浸水予測シミュレーター_Phase8.md`](引継ぎ資料_浸水予測シミュレーター_Phase8.md) | 設計・実装・検証結果の詳細 |
-| [`位置情報テスト.html`](位置情報テスト.html) | Geolocation API が使えるかを確認する小さな検査ページ |
+**Note:** Position data (Geolocation API) requires HTTPS or localhost; open via GitHub Pages at https://yukix333.github.io/inundation-simulator/ to use it.
 
-## 使い方
+## Features
 
-1. `浸水予測シミュレーター_Phase8_流動安定化.html` をブラウザで開く。
-2. 地図を**ズーム13以上**にして「この範囲で地形取得」を実行する
-   （DEM を細かい格子で取得するための条件。雨雲レーダーの重ね表示とは別機能）。
-3. 降雨を手入力するか、気象庁ナウキャストから取り込んで計算する。
+- Single HTML file, no build or server required
+- Manning-based flow calculation with 2D/3D visualization
+- Direct watershed-fill solver for instant results
+- Water volume conservation tracking
+- Responsive mobile/desktop layout
 
-位置情報を使う場合は `file://` ではなく安全な文脈（`https://` または `localhost`）で
-開く必要があります。`位置情報テスト.html` で確認できます。
+## Repository
 
-GitHub Pages を有効にすれば `https://` で配信され、位置情報も使えます。
+- **GitHub:** https://github.com/yukix333/inundation-simulator
+- **Status:** Public
+- **License:** See LICENSE (if present)
 
-## 計算モデルの要点
-
-- 内部状態はセルごとの体積 `Float64Array volume[]`。表示用の `water[]` は
-  常に `water[i] = volume[i] / cellArea` として同期する。
-- セル間流動は Manning 型の流量計算。`SIM_DT = 10秒` を `FLOW_SUBSTEPS = 5` に分割。
-- 1面あたりの流量上限は `faceLimitArea = cellArea / 8`。
-  これを `cellArea / 2` にすると市松模様に発散する（Phase 9-A）。
-- 簡易水位法は時間積分せず、窪地充填（流下 → 充填と溢流の Union-Find 併合）で直接解く。
-  115k セルで 41〜88 ms（Phase 9-B）。
-
-詳細と検証結果は引継ぎ資料を参照してください。
-
-## 開発メモ
-
-- `*.bak` は `.gitignore` 済み。バックアップは Git の履歴で代替する。
-- `.gitattributes` で改行コードの自動変換を無効にしている。
