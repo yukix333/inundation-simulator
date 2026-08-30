@@ -924,6 +924,25 @@ svg.leaflet-image-layer.leaflet-interactive path {
       </div>
     </div>
 
+    <div class="sec" id="secHazard">
+      <h2>外水（河川・高潮）の想定区域</h2>
+      <p class="hint">このシミュレーターが計算しているのは内水氾濫だけです。前日〜数時間前の備えでは
+        河川の氾濫と高潮のほうが本命のリスクになるので、公式の想定区域を必ず重ねて確認してください。</p>
+      <div id="hazardVerdict"></div>
+      <div class="check"><input type="checkbox" id="hzFlood"><label for="hzFlood">洪水浸水想定区域（想定最大規模）</label></div>
+      <div class="check"><input type="checkbox" id="hzHightide"><label for="hzHightide">高潮浸水想定区域（想定最大規模）</label></div>
+      <div class="check"><input type="checkbox" id="hzKaoku"><label for="hzKaoku">家屋倒壊等氾濫想定区域（河岸侵食）</label></div>
+      <div class="check"><input type="checkbox" id="hzKeizoku"><label for="hzKeizoku">浸水継続時間</label></div>
+      <div class="row">
+        <label for="hzOp">不透明度</label>
+        <input type="range" id="hzOp" min="10" max="100" step="5" value="60">
+        <output id="hzOpOut">60%</output>
+      </div>
+      <p class="hint">出典: <a href="https://disaportal.gsi.go.jp/" target="_blank" rel="noopener">国土地理院「重ねるハザードマップ」</a>。
+        浸水深の区分は色分けの凡例で読んでください（このツールは区域の内外だけを判定しています）。
+        シミュレーション結果は想定区域の上に重なるので、下の色を見るときは「水をクリア」を押してください。</p>
+    </div>
+
     <div class="sec">
       <h2>1. 対象エリア</h2>
       <p class="hint">地図を動かして対象地域を表示する（ズーム13以上）と、表示範囲の標高データを自動で取得します。計算中に地図を動かした場合も、移動先のエリアを取得し直します。</p>
@@ -4200,6 +4219,7 @@ function refreshPlaces(){
   renderPlaceList();
   syncPlaceMarkers();
   updatePlaceVerdict();
+  updateHazardVerdict();   // 外水の想定区域は地点が変わったときだけ引き直す(通信を伴うため)
 }
 
 function renderPlaceList(){
@@ -4423,10 +4443,131 @@ function updatePlaceVerdict(){
     '<p class="vnote">内水氾濫のみの計算です。河川の氾濫（外水）は含みません。</p></div>';
 }
 
+
+/* ================= 外水（河川・高潮）の想定区域 =================
+   このツールの計算は内水氾濫だけで、河川の氾濫と高潮は一切入っていない。
+   内水の結果だけを見て「うちは浸からない」と誤った安心を得る導線が生まれるため、
+   公式の想定区域を重ね、選択中の地点が区域内かどうかを必ず知らせる。
+
+   タイルの色分け（浸水深の区分）は、公式の凡例と対応づけられることを確認できなかったので、
+   ここでは判定を「区域の内側かどうか」に限っている。深さは地図の色と公式凡例で読むこと。
+   タイルは z17 まで整備されている（2026-08 時点で実測）。 */
+const HAZARD_BASE = 'https://disaportaldata.gsi.go.jp/raster/';
+const HAZARD_QUERY_Z = 17;          // 地点判定に使うズーム（整備されている最大ズーム）
+const HAZARD_LAYERS = [
+  {id:'hzFlood',    path:'01_flood_l2_shinsuishin_data',        name:'洪水浸水想定区域',
+   hit:'河川が氾濫したときの浸水想定区域内です'},
+  {id:'hzHightide', path:'03_hightide_l2_shinsuishin_data',     name:'高潮浸水想定区域',
+   hit:'高潮の浸水想定区域内です'},
+  {id:'hzKaoku',    path:'01_flood_l2_kaokutoukai_kagan_data',  name:'家屋倒壊等氾濫想定区域',
+   hit:'家屋が倒壊するおそれのある区域内です。ここは自宅にとどまる選択が取れません'},
+  {id:'hzKeizoku',  path:'01_flood_l2_keizoku_data',            name:'浸水継続時間',
+   hit:'浸水が長く続くと想定されている区域内です（在宅避難には備蓄が要ります）'}
+];
+
+const hazardLayers = new Map();     // id -> L.TileLayer
+
+function hazardOpacity(){ return +$('hzOp').value / 100; }
+
+function updateHazardLayer(spec){
+  const on = $(spec.id).checked;
+  let layer = hazardLayers.get(spec.id);
+  if (on){
+    if (!layer){
+      layer = L.tileLayer(HAZARD_BASE + spec.path + '/{z}/{x}/{y}.png', {
+        opacity: hazardOpacity(), maxNativeZoom: HAZARD_QUERY_Z, maxZoom: 18,
+        attribution: "<a href='https://disaportal.gsi.go.jp/' target='_blank'>ハザードマップポータル</a>"
+      });
+      hazardLayers.set(spec.id, layer);
+    }
+    layer.addTo(map);
+  } else if (layer && layer._map){
+    layer.remove();
+  }
+  if (radarLayer) radarLayer.bringToFront();   // 雨雲レーダーは常に最前面に保つ
+}
+
+for (const spec of HAZARD_LAYERS)
+  $(spec.id).addEventListener('change', () => updateHazardLayer(spec));
+
+$('hzOp').addEventListener('input', () => {
+  $('hzOpOut').textContent = $('hzOp').value + '%';
+  for (const layer of hazardLayers.values()) layer.setOpacity(hazardOpacity());
+});
+
+/* タイル1枚ぶんの画素。欠損タイル(=その区域が無い)は null を覚えて再取得しない。 */
+const hazardPixelCache = new Map();   // url -> Uint8ClampedArray | null
+async function hazardTilePixels(url){
+  if (hazardPixelCache.has(url)) return hazardPixelCache.get(url);
+  const p = (async () => {
+    const img = await loadImg(url);
+    if (!img) return null;
+    const c = document.createElement('canvas');
+    c.width = c.height = 256;
+    const x = c.getContext('2d', {willReadFrequently: true});
+    x.drawImage(img, 0, 0);
+    try { return x.getImageData(0, 0, 256, 256).data; }
+    catch(e){ return null; }          // 万一CORSが効かない環境では判定を諦める
+  })();
+  hazardPixelCache.set(url, p);
+  return p;
+}
+
+/* その地点が想定区域の内側か。タイルが無い/透明なら区域外。 */
+async function hazardHitAt(spec, lat, lng){
+  const wx = lngToX(lng, HAZARD_QUERY_Z), wy = latToY(lat, HAZARD_QUERY_Z);
+  const tx = Math.floor(wx / 256), ty = Math.floor(wy / 256);
+  const data = await hazardTilePixels(`${HAZARD_BASE}${spec.path}/${HAZARD_QUERY_Z}/${tx}/${ty}.png`);
+  if (!data) return false;
+  const px = Math.min(255, Math.floor(wx) - tx * 256);
+  const py = Math.min(255, Math.floor(wy) - ty * 256);
+  return data[(py * 256 + px) * 4 + 3] > 10;
+}
+
+/* 選択中の地点について、4種類の想定区域を全部照会する。
+   レイヤーの表示・非表示に関わらず調べる（警告のほうが表示設定より重要なため）。 */
+let hazardQueryToken = 0;
+async function updateHazardVerdict(){
+  const box = $('hazardVerdict');
+  const p = activePlace();
+  if (!p){ box.textContent = ''; return; }
+  const token = ++hazardQueryToken;
+  box.innerHTML = '<div class="verdict lv-safe">' + escapeHtml(p.name) + ' の想定区域を照会しています…</div>';
+
+  let results;
+  try {
+    results = await Promise.all(HAZARD_LAYERS.map(async spec => ({spec, hit: await hazardHitAt(spec, p.lat, p.lng)})));
+  } catch(e){
+    if (token !== hazardQueryToken) return;
+    box.innerHTML = '<div class="verdict lv-caution">想定区域を照会できませんでした。' +
+      '<a href="https://disaportal.gsi.go.jp/" target="_blank" rel="noopener">ハザードマップポータル</a>で直接確認してください。</div>';
+    return;
+  }
+  if (token !== hazardQueryToken) return;   // 照会中に地点が変わっていたら破棄
+
+  const hits = results.filter(r => r.hit);
+  if (!hits.length){
+    box.innerHTML = '<div class="verdict lv-safe"><b>' + escapeHtml(p.name) + '</b>' +
+      ' は、洪水・高潮のいずれの想定区域にも入っていません。<br>' +
+      '<span class="vnote">ただし想定区域は対象の河川ごとに作られています。小さな河川や、' +
+      '想定を超える降り方は含まれません。自治体のハザードマップも確認してください。</span></div>';
+    return;
+  }
+  const items = hits.map(r => '<li><b>' + escapeHtml(r.spec.name) + '</b>: ' + escapeHtml(r.spec.hit) + '</li>').join('');
+  const kaoku = hits.some(r => r.spec.id === 'hzKaoku');
+  box.innerHTML = '<div class="verdict lv-' + (kaoku ? 'danger' : 'warn') + '">' +
+    '<div class="vtitle">' + escapeHtml(p.name) + ' は外水の想定区域内です</div>' +
+    '<ul class="vacts">' + items + '</ul>' +
+    '<p class="vnote">上の内水の判定に「浸水なし」と出ていても、この区域内であれば' +
+    '河川の氾濫で浸水します。避難の判断は自治体の避難情報と公式ハザードマップに従ってください。</p></div>';
+}
+
+
 /* ================= 操作値と表示位置の永続化 ================= */
 const SETTING_IDS = ['baseMap','rrim','rrimOp','radarShow','radarOp','terrainViz','vizGain',
   'tex3d','texRes','exag3d','rainRate','rainDur','sewerPreset','sewerRate','sewerStore',
-  'surfacePreset','infilRate','flowSmooth','edgeDrain','simSpeed','placeFloor'];
+  'surfacePreset','infilRate','flowSmooth','edgeDrain','simSpeed','placeFloor',
+  'hzFlood','hzHightide','hzKaoku','hzKeizoku','hzOp'];
 
 let settingsTimer = 0;
 function saveSettings(){
@@ -4462,7 +4603,9 @@ function restoreSettings(){
   $('vizGainOut').textContent  = '×' + $('vizGain').value;
   $('rrimOpOut').textContent   = $('rrimOp').value + '%';
   $('radarOpOut').textContent  = $('radarOp').value + '%';
+  $('hzOpOut').textContent     = $('hzOp').value + '%';
   rrimLayer.setOpacity(+$('rrimOp').value / 100);
+  for (const spec of HAZARD_LAYERS) if ($(spec.id).checked) updateHazardLayer(spec);
   if (saved.mode === 'sim' || saved.mode === 'quick') setMode(saved.mode);
   if (saved.rainMode === 'radar' || saved.rainMode === 'manual') setRainMode(saved.rainMode);
   // 背景地図・赤色立体地図・レーダーはレイヤー操作が要るので、既存のハンドラに任せる
