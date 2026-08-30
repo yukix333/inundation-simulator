@@ -725,9 +725,23 @@ svg.leaflet-image-layer.leaflet-interactive path {
   /* ===== マイ地点 ===== */
   input[type=text],input[type=number]{font:inherit;font-size:12px;padding:5px 6px;min-width:0;
     border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--panel-fg)}
-  .verdict{margin-bottom:8px;padding:9px 10px;border-radius:7px;font-size:12px;line-height:1.6;
-    border:1px solid var(--border);background:#f4f7fa}
+  /* 判定カード。危険度は左の色帯で示し、文字色は変えない(小さい文字を読みにくくしないため) */
+  .verdict{margin-bottom:8px;padding:9px 11px;border-radius:7px;font-size:12px;line-height:1.6;
+    border:1px solid var(--border);border-left-width:5px;background:#f4f7fa}
   .verdict b{font-variant-numeric:tabular-nums}
+  .verdict.lv-safe   {border-left-color:#9aa8b4}
+  .verdict.lv-caution{border-left-color:#e0a800;background:#fdf8e8}
+  .verdict.lv-warn   {border-left-color:#e06c00;background:#fdf1e6}
+  .verdict.lv-danger {border-left-color:var(--danger);background:#fdecec}
+  .vhead{display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap}
+  .vname{font-weight:700;font-size:13px}
+  .vmeta{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+  .vtitle{margin-top:3px;font-weight:700;font-size:13px}
+  .vdepth{font-variant-numeric:tabular-nums}
+  .vnote{margin:5px 0 0;font-size:11px;color:var(--muted);line-height:1.5}
+  .vacts-h{margin-top:8px;font-weight:700;font-size:12px}
+  .vacts{margin:3px 0 0;padding-left:1.35em;font-size:12px;line-height:1.55}
+  .vacts li{margin-bottom:3px}
   #placeList{margin-bottom:8px}
   #placeList:empty{display:none}
   .place{display:flex;align-items:center;gap:6px;margin-bottom:6px;padding:6px 8px;font-size:12px;
@@ -4238,6 +4252,8 @@ function syncPlaceMarkers(){
 
 function selectPlace(id){
   activePlaceId = id;
+  const p = activePlace();
+  if (p) $('placeFloor').value = p.floorCm;   // 入力欄は選択中の地点の値を映す
   savePlaces();
   refreshPlaces();
 }
@@ -4305,21 +4321,106 @@ function cellIndexAt(lat, lng){
   return r * grid.cols + c;
 }
 
-/* 選択中の地点の状況。中身は「深さ→行動」の変換で置き換えていく。 */
+/* ================= 深さ → 行動の変換 =================
+   予測値と「今から何をするか」をつなぐ唯一の場所。深さを見せるだけでは行動が決まらないので、
+   地面からの深さ（屋外の通行・車）と、登録した床の高さからの深さ（屋内の被害）の
+   2つの軸に分けて判定し、それぞれに対応する手順を出す。
+
+   数値は一般に公表されている目安であって、法令上の基準ではない。運用にあたっては
+   自治体の避難情報の発表基準と、車の浸水に関する公表資料で確認すること。
+   浸水深の区切りは、地図の凡例（0.3 / 0.5 / 1.0 / 3.0 m）と揃えてある。 */
+
+// 地面からの浸水深[m]で決まる屋外の状況。上から順に最初に当てはまったものを使う。
+const GROUND_LEVELS = [
+  {min:1.00, key:'danger',  label:'屋外への移動はできない',
+   note:'大人でも歩けず、車は水没します。垂直避難に切り替える段階です。'},
+  {min:0.50, key:'danger',  label:'歩行困難・車は水没',
+   note:'車が浮いてエンジンが止まり、ドアも開かなくなるおそれがあります。'},
+  {min:0.30, key:'warn',    label:'車の移動はもう危険',
+   note:'ドアが開きにくくなり、走行も危険になる深さです。'},
+  {min:0.10, key:'caution', label:'道路が冠水する',
+   note:'側溝・マンホール・段差が水面下に隠れて見えなくなります。'},
+  {min:0.01, key:'caution', label:'路面に水がたまる', note:''},
+  {min:-1,   key:'safe',    label:'この地点では浸水を予測していない', note:''}
+];
+
+// 床面からの浸水深[m]で決まる屋内の被害。区切りは地図の凡例と同じ。
+function floorState(groundDepth, floorCm){
+  const floorDepth = groundDepth - floorCm / 100;
+  if (groundDepth < 0.01) return {key:'safe',    label:'屋内への浸水なし',       floorDepth};
+  if (floorDepth <= 0)    return {key:'caution', label:'床下浸水のおそれ',       floorDepth};
+  if (floorDepth < 1.0)   return {key:'warn',    label:'床上浸水のおそれ',       floorDepth};
+  return {key:'danger', label:'1階のほぼ全体が水没するおそれ', floorDepth};
+}
+
+/* 前日〜数時間前に、この地点で実際に手を動かす順に並べた手順。 */
+function actionsFor(groundDepth, floorDepth){
+  if (groundDepth < 0.01) return [];
+  const a = [];
+  if (floorDepth >= 1.0)
+    a.push('2階以上へ上がれるか確認する。上がれないなら、暗くなる前に水平避難する');
+  if (floorDepth > 0)
+    a.push('家財・貴重品・思い出の品・電子機器を2階か高い棚へ上げる');
+  else
+    a.push('床下の給湯器・エアコン室外機・コンセント周りを確認し、可能なら底上げする');
+  if (groundDepth >= 0.30)
+    a.push('車を高い場所へ移す。動かすなら今（30 cmでドアが開かず、走行も危険になります）');
+  else if (groundDepth >= 0.10)
+    a.push('車を高い場所へ移すか、動かさないと決めるかを、今のうちに判断する');
+  a.push('止水板・土のう・水を入れたゴミ袋を、玄関と地面に近い開口部に置く');
+  a.push('停電に備える（モバイルバッテリー・明かり・浴槽に水を張る）');
+  a.push('避難先と経路を今のうちに決める。夜間や冠水後の移動は避ける');
+  return a;
+}
+
+/* 選択中の地点について、深さと「今からやること」を表示する。 */
 function updatePlaceVerdict(){
   const box = $('placeVerdict');
   const p = activePlace();
   if (!p){ box.textContent = ''; return; }
+
+  if (!grid){
+    box.innerHTML = '<div class="verdict lv-safe"><b>' + escapeHtml(p.name) + '</b><br>' +
+      '地形データがまだありません。地図をこの地点の周辺へ動かしてください。</div>';
+    return;
+  }
   const i = cellIndexAt(p.lat, p.lng);
   if (i < 0){
-    box.innerHTML = '<div class="verdict"><b>' + escapeHtml(p.name) + '</b><br>' +
+    box.innerHTML = '<div class="verdict lv-safe"><b>' + escapeHtml(p.name) + '</b><br>' +
       '地形の取得エリア外です。地図をこの地点の周辺へ動かしてください。</div>';
     return;
   }
-  const depth = grid.water[i];
-  box.innerHTML = '<div class="verdict"><b>' + escapeHtml(p.name) + '</b>　標高 ' +
-    grid.elev[i].toFixed(1) + ' m<br>予測浸水深: <b>' +
-    (depth >= 0.01 ? fmtDepth(depth) : 'なし') + '</b></div>';
+
+  const depth  = grid.water[i];
+  const ground = GROUND_LEVELS.find(l => depth >= l.min);
+  const floor  = floorState(depth, p.floorCm);
+  // 屋外と屋内で重いほうを、その地点全体の危険度として扱う
+  const rank = {safe:0, caution:1, warn:2, danger:3};
+  const key  = rank[floor.key] >= rank[ground.key] ? floor.key : ground.key;
+
+  const head = '<div class="vhead"><span class="vname">' + escapeHtml(p.name) + '</span>' +
+    '<span class="vmeta">標高 ' + grid.elev[i].toFixed(1) + ' m ／ 床 +' + p.floorCm + ' cm</span></div>';
+
+  if (depth < 0.01){
+    box.innerHTML = '<div class="verdict lv-safe">' + head +
+      '<div class="vtitle">' + ground.label + '</div>' +
+      '<p class="vnote">この結果は、降った雨が地形の窪地にたまる内水氾濫だけを見たものです。' +
+      '河川の氾濫（外水）は計算に入っていないので、必ずハザードマップも確認してください。</p></div>';
+    return;
+  }
+
+  const floorTxt = floor.floorDepth > 0
+    ? '床面から <b>+' + fmtDepth(floor.floorDepth) + '</b>'
+    : '床面まで あと <b>' + fmtDepth(-floor.floorDepth) + '</b>';
+  const acts = actionsFor(depth, floor.floorDepth)
+    .map(t => '<li>' + escapeHtml(t) + '</li>').join('');
+
+  box.innerHTML = '<div class="verdict lv-' + key + '">' + head +
+    '<div class="vtitle">' + escapeHtml(floor.label) + '</div>' +
+    '<div class="vdepth">予測浸水深 <b>' + fmtDepth(depth) + '</b>（' + floorTxt + '）</div>' +
+    (ground.note ? '<p class="vnote">' + escapeHtml(ground.label) + '。' + escapeHtml(ground.note) + '</p>' : '') +
+    '<div class="vacts-h">今からやること</div><ol class="vacts">' + acts + '</ol>' +
+    '<p class="vnote">内水氾濫のみの計算です。河川の氾濫（外水）は含みません。</p></div>';
 }
 
 /* ================= 操作値と表示位置の永続化 ================= */
@@ -4376,6 +4477,9 @@ function restoreSettings(){
 function bootRestore(){
   loadPlaces();
   const saved = restoreSettings();
+  // 床の高さの入力欄は、保存された既定値ではなく選択中の地点の値に合わせる
+  const p = activePlace();
+  if (p) $('placeFloor').value = p.floorCm;
   refreshPlaces();
   const v = saved && saved.view;
   if (v && Number.isFinite(v.lat) && Number.isFinite(v.lng) && Number.isFinite(v.zoom)){
