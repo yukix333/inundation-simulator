@@ -722,6 +722,25 @@ svg.leaflet-image-layer.leaflet-interactive path {
   #status{font-size:12px;color:var(--muted);min-height:18px}
   #status.err{color:var(--danger)}
 
+  /* ===== マイ地点 ===== */
+  input[type=text],input[type=number]{font:inherit;font-size:12px;padding:5px 6px;min-width:0;
+    border:1px solid var(--border);border-radius:5px;background:#fff;color:var(--panel-fg)}
+  .verdict{margin-bottom:8px;padding:9px 10px;border-radius:7px;font-size:12px;line-height:1.6;
+    border:1px solid var(--border);background:#f4f7fa}
+  .verdict b{font-variant-numeric:tabular-nums}
+  #placeList{margin-bottom:8px}
+  #placeList:empty{display:none}
+  .place{display:flex;align-items:center;gap:6px;margin-bottom:6px;padding:6px 8px;font-size:12px;
+    border:1px solid var(--border);border-radius:6px;background:#fbfcfd;cursor:pointer}
+  .place.sel{border-color:var(--accent);background:#eaf3fc}
+  .place .pname{flex:1;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .place .pmeta{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .place button{min-height:0;padding:3px 6px;font-size:11px;border-radius:4px;line-height:1}
+  /* 地点ピン。中心の点が実際の座標を指す */
+  .place-pin{width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;
+    border:3px solid var(--accent);background:#fff;box-shadow:0 1px 5px rgba(0,0,0,.4)}
+  .place-pin.sel{border-color:var(--danger);background:#fff4f4;transform:scale(1.25)}
+
   #legend{position:absolute;left:10px;bottom:24px;z-index:800;background:rgba(255,255,255,.92);
     border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:11px;display:none}
   #legend h3{margin:0 0 6px;font-size:11px}
@@ -866,6 +885,30 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <h1>浸水予測シミュレーター</h1>
       <p>地形データ: 国土地理院 標高タイル（5m DEM優先）</p>
     </header>
+
+    <div class="sec" id="secPlaces">
+      <h2>マイ地点</h2>
+      <div id="placeVerdict"></div>
+      <div id="placeList"></div>
+      <div class="row">
+        <label for="placeName">名前</label>
+        <input type="text" id="placeName" placeholder="自宅" maxlength="20" style="flex:2">
+      </div>
+      <div class="row">
+        <label for="placeFloor">床の高さ（地面から）</label>
+        <input type="number" id="placeFloor" min="0" max="500" step="5" value="45" style="width:70px">
+        <output style="min-width:0">cm</output>
+      </div>
+      <div class="btnrow">
+        <button id="btnAddCenter">地図の中心を登録</button>
+        <button id="btnAddGeo">現在地を登録</button>
+      </div>
+      <p class="hint">登録した地点はこの端末のブラウザにのみ保存され、外部へは送信されません。地点をタップすると選択され、以降の判定はその地点について行われます。<br>
+        床の高さは、玄関の地面から床までの段差の合計です（分からなければ既定の45cmのままで構いません）。</p>
+      <div class="btnrow" style="margin-top:8px">
+        <button id="btnPlaceDel">選択中の地点を削除</button>
+      </div>
+    </div>
 
     <div class="sec">
       <h2>1. 対象エリア</h2>
@@ -3081,7 +3124,9 @@ map.on('moveend', () => {
   }
   captureTerrain().catch(e => setStatus('地形の自動取得に失敗しました: ' + e.message, true));
 });
-if (map.getZoom() >= 13) map.fire('moveend');   // 初期表示エリアも自動取得する
+// 保存された設定がある場合、初期取得はスクリプト末尾の bootRestore() に任せる。
+// 既定の表示位置で取得してしまうと、復元後にもう一度取り直すことになるため。
+if (!lsGet('floodSim.settings.v1') && map.getZoom() >= 13) map.fire('moveend');   // 初期表示エリアも自動取得する
 
 /* ================= 気象庁 降水ナウキャスト(雨雲レーダー) ================= */
 const RADAR_Z = 10;          // hrpnsタイルの最大ズーム(約125m/px)
@@ -4056,6 +4101,7 @@ function updateStats(){
   const areaKm2 = cnt * cellM * cellM / 1e6;
   $('stArea').textContent = areaKm2 >= 0.01 ? areaKm2.toFixed(2) + ' km²' : (cnt*cellM*cellM).toFixed(0)+' m²';
   updateWaterBalance();
+  updatePlaceVerdict();   // 全体の統計と同時に、選択中の地点の判定も更新する
 }
 
 function fmtVolume(v){
@@ -4078,13 +4124,8 @@ function updateWaterBalance(){
 map.on('click', ev => {
   if (!grid) return;
   // クリック地点を、標高を読み出したときと同じワールドpx座標系でセル番号に変換する
-  const {x0, x1, y0, y1} = grid.px;
-  const fx = (lngToX(ev.latlng.lng, DEM_Z) - x0) / (x1 - x0);
-  const fy = (latToY(ev.latlng.lat, DEM_Z) - y0) / (y1 - y0);
-  if (fx < 0 || fx >= 1 || fy < 0 || fy >= 1) return;   // 取得エリアの外
-  const c = Math.min(grid.cols-1, Math.floor(fx * grid.cols));
-  const r = Math.min(grid.rows-1, Math.floor(fy * grid.rows));
-  const i = r * grid.cols + c;
+  const i = cellIndexAt(ev.latlng.lat, ev.latlng.lng);
+  if (i < 0) return;   // 取得エリアの外
   const surfaceName = globalSurfaceSpec().label;
   const probe = $('probe');
   probe.innerHTML = `標高: <b>${grid.elev[i].toFixed(1)} m</b><br>浸水深: <b>${grid.water[i] >= 0.01 ? fmtDepth(grid.water[i]) : 'なし'}</b><br>地表: <b>${surfaceName}</b>`;
@@ -4097,6 +4138,260 @@ map.on('click', ev => {
 
 // 画面サイズ変更時の貼り直しは map の 'resize' イベント(updateOverlayTransform)が担当する。
 // キャンバスの解像度はグリッド固定なので、ここで再描画する必要はない。
+
+/* ================= マイ地点（登録と永続化） =================
+   前日〜数時間前の備えでは、同じ画面を夜・朝・昼と何度も開き直すことになる。
+   そのたびに地点を探し直し・条件を入れ直しでは判断の道具にならないので、
+   地点と操作値をこの端末の localStorage に持たせ、開いた時点の続きから始められるようにする。
+   プライベートモードや容量超過で保存できない環境でも、計算自体は従来どおり動く。 */
+const LS_PLACES   = 'floodSim.places.v1';
+const LS_SETTINGS = 'floodSim.settings.v1';
+
+function lsGet(key){
+  try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : null; }
+  catch(e){ return null; }
+}
+function lsSet(key, value){
+  try { localStorage.setItem(key, JSON.stringify(value)); return true; }
+  catch(e){ return false; }
+}
+
+let places = [];                  // [{id, name, lat, lng, floorCm}]
+let activePlaceId = null;
+const placeMarkers = new Map();   // id -> L.Marker
+
+const activePlace = () => places.find(p => p.id === activePlaceId) || null;
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, ch =>
+    ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[ch]));
+}
+
+function loadPlaces(){
+  const saved = lsGet(LS_PLACES) || {};
+  places = Array.isArray(saved.places)
+    ? saved.places
+        .filter(p => p && Number.isFinite(+p.lat) && Number.isFinite(+p.lng))
+        .map(p => ({id: String(p.id), name: String(p.name || '地点'),
+                    lat: +p.lat, lng: +p.lng,
+                    floorCm: Math.max(0, Math.min(500, +p.floorCm || 0))}))
+    : [];
+  activePlaceId = places.some(p => p.id === saved.active) ? saved.active
+                : (places[0] ? places[0].id : null);
+}
+function savePlaces(){ lsSet(LS_PLACES, {places, active: activePlaceId}); }
+
+/* 一覧・ピン・判定は常にまとめて描き直す。表示状態が複数箇所に散らないようにするため。 */
+function refreshPlaces(){
+  renderPlaceList();
+  syncPlaceMarkers();
+  updatePlaceVerdict();
+}
+
+function renderPlaceList(){
+  const box = $('placeList');
+  box.textContent = '';
+  for (const p of places){
+    const row = document.createElement('div');
+    row.className = 'place' + (p.id === activePlaceId ? ' sel' : '');
+    const name = document.createElement('span');
+    name.className = 'pname';
+    name.textContent = p.name;
+    const meta = document.createElement('span');
+    meta.className = 'pmeta';
+    meta.textContent = '床+' + p.floorCm + 'cm';
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.textContent = '地図へ';
+    go.addEventListener('click', ev => {
+      ev.stopPropagation();
+      map.setView([p.lat, p.lng], Math.max(map.getZoom(), 15));
+    });
+    row.append(name, meta, go);
+    row.addEventListener('click', () => selectPlace(p.id));
+    box.appendChild(row);
+  }
+  $('btnPlaceDel').disabled = !activePlaceId;
+}
+
+function syncPlaceMarkers(){
+  for (const [id, mk] of placeMarkers){
+    if (!places.some(p => p.id === id)){ map.removeLayer(mk); placeMarkers.delete(id); }
+  }
+  for (const p of places){
+    let mk = placeMarkers.get(p.id);
+    if (!mk){
+      // iconSize:[0,0] で座標そのものに置き、丸の中心合わせはCSSのマイナスマージンで行う
+      mk = L.marker([p.lat, p.lng], {
+        icon: L.divIcon({className: '', html: '<div class="place-pin"></div>', iconSize: [0, 0]}),
+        keyboard: false,
+        title: p.name
+      }).addTo(map);
+      mk.on('click', () => selectPlace(p.id));
+      placeMarkers.set(p.id, mk);
+    }
+    mk.setLatLng([p.lat, p.lng]);
+    const el = mk.getElement();
+    if (el && el.firstElementChild) el.firstElementChild.classList.toggle('sel', p.id === activePlaceId);
+  }
+}
+
+function selectPlace(id){
+  activePlaceId = id;
+  savePlaces();
+  refreshPlaces();
+}
+
+function addPlace(lat, lng){
+  const name = ($('placeName').value || '').trim() || ('地点' + (places.length + 1));
+  const floorCm = Math.max(0, Math.min(500, +$('placeFloor').value || 0));
+  const p = {id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+             name, lat, lng, floorCm};
+  places.push(p);
+  activePlaceId = p.id;
+  $('placeName').value = '';
+  savePlaces();
+  refreshPlaces();
+  return p;
+}
+
+$('btnAddCenter').addEventListener('click', () => {
+  const c = map.getCenter();
+  const p = addPlace(c.lat, c.lng);
+  setStatus('地図の中心を「' + p.name + '」として登録しました。');
+});
+
+$('btnAddGeo').addEventListener('click', () => {
+  if (!navigator.geolocation){ setStatus('この環境では現在地を取得できません。', true); return; }
+  setStatus('現在地を取得しています…');
+  navigator.geolocation.getCurrentPosition(pos => {
+    const {latitude, longitude} = pos.coords;
+    const p = addPlace(latitude, longitude);
+    map.setView([latitude, longitude], Math.max(map.getZoom(), 15));
+    setStatus('現在地を「' + p.name + '」として登録しました。');
+  }, err => {
+    setStatus('現在地を取得できませんでした（HTTPSまたはlocalhostが必要です）: ' + err.message, true);
+  }, {enableHighAccuracy: true, timeout: 10000, maximumAge: 60000});
+});
+
+$('btnPlaceDel').addEventListener('click', () => {
+  const p = activePlace();
+  if (!p) return;
+  places = places.filter(x => x.id !== p.id);
+  activePlaceId = places[0] ? places[0].id : null;
+  savePlaces();
+  refreshPlaces();
+  setStatus('「' + p.name + '」を削除しました。');
+});
+
+// 床の高さは「次に登録する地点の既定値」であると同時に、選択中の地点への変更でもある
+$('placeFloor').addEventListener('change', () => {
+  const p = activePlace();
+  if (!p) return;
+  p.floorCm = Math.max(0, Math.min(500, +$('placeFloor').value || 0));
+  savePlaces();
+  refreshPlaces();
+});
+
+/* 緯度経度 → 取得済みグリッドのセル番号。エリア外・未取得なら -1 */
+function cellIndexAt(lat, lng){
+  if (!grid) return -1;
+  const {x0, x1, y0, y1} = grid.px;
+  const fx = (lngToX(lng, DEM_Z) - x0) / (x1 - x0);
+  const fy = (latToY(lat, DEM_Z) - y0) / (y1 - y0);
+  if (fx < 0 || fx >= 1 || fy < 0 || fy >= 1) return -1;
+  const c = Math.min(grid.cols - 1, Math.floor(fx * grid.cols));
+  const r = Math.min(grid.rows - 1, Math.floor(fy * grid.rows));
+  return r * grid.cols + c;
+}
+
+/* 選択中の地点の状況。中身は「深さ→行動」の変換で置き換えていく。 */
+function updatePlaceVerdict(){
+  const box = $('placeVerdict');
+  const p = activePlace();
+  if (!p){ box.textContent = ''; return; }
+  const i = cellIndexAt(p.lat, p.lng);
+  if (i < 0){
+    box.innerHTML = '<div class="verdict"><b>' + escapeHtml(p.name) + '</b><br>' +
+      '地形の取得エリア外です。地図をこの地点の周辺へ動かしてください。</div>';
+    return;
+  }
+  const depth = grid.water[i];
+  box.innerHTML = '<div class="verdict"><b>' + escapeHtml(p.name) + '</b>　標高 ' +
+    grid.elev[i].toFixed(1) + ' m<br>予測浸水深: <b>' +
+    (depth >= 0.01 ? fmtDepth(depth) : 'なし') + '</b></div>';
+}
+
+/* ================= 操作値と表示位置の永続化 ================= */
+const SETTING_IDS = ['baseMap','rrim','rrimOp','radarShow','radarOp','terrainViz','vizGain',
+  'tex3d','texRes','exag3d','rainRate','rainDur','sewerPreset','sewerRate','sewerStore',
+  'surfacePreset','infilRate','flowSmooth','edgeDrain','simSpeed','placeFloor'];
+
+let settingsTimer = 0;
+function saveSettings(){
+  const values = {};
+  for (const id of SETTING_IDS){
+    const el = $(id);
+    if (!el) continue;
+    values[id] = el.type === 'checkbox' ? el.checked : el.value;
+  }
+  const c = map.getCenter();
+  lsSet(LS_SETTINGS, {values, mode, rainMode, view: {lat: c.lat, lng: c.lng, zoom: map.getZoom()}});
+}
+function saveSettingsSoon(){
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(saveSettings, 400);   // スライダー操作中の書き込みを1回にまとめる
+}
+
+/* 保存値をコントロールへ戻す。表示ラベルやレイヤーへの反映は既存の更新関数を直接呼ぶ。
+   change を投げると、地形の再取得まで走ってしまう配線（微地形の可視化）があるため。 */
+function restoreSettings(){
+  const saved = lsGet(LS_SETTINGS);
+  if (!saved || !saved.values) return null;
+  for (const id of SETTING_IDS){
+    const el = $(id), v = saved.values[id];
+    if (!el || v === undefined) continue;
+    if (el.type === 'checkbox') el.checked = !!v;
+    else el.value = v;
+  }
+  updateRainOut();
+  updateSewerOut();
+  updateInfiltrationOut();
+  $('simSpeedOut').textContent = '×' + $('simSpeed').value;
+  $('vizGainOut').textContent  = '×' + $('vizGain').value;
+  $('rrimOpOut').textContent   = $('rrimOp').value + '%';
+  $('radarOpOut').textContent  = $('radarOp').value + '%';
+  rrimLayer.setOpacity(+$('rrimOp').value / 100);
+  if (saved.mode === 'sim' || saved.mode === 'quick') setMode(saved.mode);
+  if (saved.rainMode === 'radar' || saved.rainMode === 'manual') setRainMode(saved.rainMode);
+  // 背景地図・赤色立体地図・レーダーはレイヤー操作が要るので、既存のハンドラに任せる
+  if ($('baseMap').value !== 'pale') $('baseMap').dispatchEvent(new Event('change'));
+  if ($('rrim').checked) $('rrim').dispatchEvent(new Event('change'));
+  if ($('radarShow').checked) $('radarShow').dispatchEvent(new Event('change'));
+  return saved;
+}
+
+/* 起動時の復元。地形の取得は moveend 側に任せる。setView が位置を変えれば
+   その moveend が、変えなければ末尾の fire が拾う（captureTerrain 側で多重実行は防がれる）。 */
+function bootRestore(){
+  loadPlaces();
+  const saved = restoreSettings();
+  refreshPlaces();
+  const v = saved && saved.view;
+  if (v && Number.isFinite(v.lat) && Number.isFinite(v.lng) && Number.isFinite(v.zoom)){
+    map.setView([v.lat, v.lng], v.zoom, {animate: false});
+  }
+  if (map.getZoom() >= 13) map.fire('moveend');
+}
+
+// パネル内のあらゆる操作と、地図の移動を保存対象にする
+$('panel').addEventListener('change', saveSettingsSoon);
+$('panel').addEventListener('input',  saveSettingsSoon);
+map.on('moveend', saveSettingsSoon);
+
+// 保存が無い場合の初期取得は上の moveend 発火が済ませており、その時点で capturing が
+// 立っているので、ここでの二度目の発火は captureTerrain 側で弾かれる。
+bootRestore();
 </script>
 </body>
 </html>
