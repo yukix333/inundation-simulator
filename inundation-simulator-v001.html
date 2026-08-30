@@ -769,6 +769,11 @@ svg.leaflet-image-layer.leaflet-interactive path {
     border:2px solid #1b7f3b;background:#e8f6ec;color:#1b7f3b;font-size:12px;font-weight:700;
     line-height:16px;text-align:center;box-shadow:0 1px 5px rgba(0,0,0,.35)}
   .vacts.ev li{margin-bottom:6px}
+  /* 共有まとめの出力 */
+  .share-dl{display:inline-block;margin:8px 0 4px;padding:7px 12px;font-size:13px;font-weight:600;
+    border-radius:6px;background:var(--accent);color:var(--accent-fg);text-decoration:none}
+  .share-img{display:block;width:100%;height:auto;margin-top:6px;
+    border:1px solid var(--border);border-radius:6px}
   .ev-ok {color:#1b7f3b;font-weight:600}
   .ev-bad{color:var(--danger);font-weight:600}
 
@@ -1170,6 +1175,17 @@ svg.leaflet-image-layer.leaflet-interactive path {
         地表残水 <b id="wbAfter">—</b> ／ 誤差 <b id="wbError">—</b>
       </div>
       <p class="hint">地図上をクリックすると、その地点の標高と浸水深を表示します。</p>
+      <div class="btnrow" style="margin-top:10px">
+        <button id="btnShareUrl">リンクをコピー</button>
+        <button id="btnShareText">文字をコピー</button>
+      </div>
+      <div class="btnrow" style="margin-top:7px">
+        <button id="btnShareImage">まとめ画像を作る</button>
+      </div>
+      <p class="hint" id="shareInfo">リンクには地点と条件が入っているので、家族に送れば同じ画面を開けます。
+        まとめ画像は、電波が切れても見られるように保存しておく用です。
+        <b>リンクには登録した地点の座標（自宅の位置）が含まれます。</b>送る相手にご注意ください。</p>
+      <div id="shareOut"></div>
     </div>
 
     <div class="sec" style="border-bottom:none">
@@ -5217,6 +5233,221 @@ $('btnEvacSpots').addEventListener('click', () => {
   });
 });
 
+
+/* ================= 共有と持ち出し =================
+   前日に見た結果を家族に渡せないと、備えは一人の頭の中で終わってしまう。
+   単一HTMLのままできる範囲として、(1)地点と条件を載せたリンク、(2)文字のまとめ、
+   (3)電波が切れても見られる画像、の3つを用意する。いずれも端末の中で完結し、
+   外部へ送信はしない（リンクは利用者自身が送る）。 */
+
+/* --- リンク（URLハッシュに地点と条件を載せる） --- */
+function buildShareUrl(){
+  const values = {};
+  for (const id of SETTING_IDS){
+    const el = $(id);
+    if (!el) continue;
+    values[id] = el.type === 'checkbox' ? el.checked : el.value;
+  }
+  const c = map.getCenter();
+  const payload = {v: 1, places, active: activePlaceId, values, mode, rainMode,
+                   view: {lat: +c.lat.toFixed(6), lng: +c.lng.toFixed(6), zoom: map.getZoom()}};
+  return location.origin + location.pathname + '#s=' + encodeURIComponent(JSON.stringify(payload));
+}
+
+/* 起動時、リンクに載っていた地点と条件を取り込む。手元の保存より共有リンクを優先する。 */
+function applyShareUrl(){
+  const m = /[#&]s=([^&]+)/.exec(location.hash);
+  if (!m) return false;
+  let payload;
+  try { payload = JSON.parse(decodeURIComponent(m[1])); }
+  catch(e){ return false; }
+  if (!payload || payload.v !== 1) return false;
+  if (Array.isArray(payload.places)){
+    places = payload.places
+      .filter(p => p && Number.isFinite(+p.lat) && Number.isFinite(+p.lng))
+      .map(p => ({id: String(p.id), name: String(p.name || '地点'),
+                  lat: +p.lat, lng: +p.lng,
+                  floorCm: Math.max(0, Math.min(500, +p.floorCm || 0))}));
+    activePlaceId = places.some(p => p.id === payload.active) ? payload.active
+                  : (places[0] ? places[0].id : null);
+    savePlaces();
+  }
+  // 受け取った設定は、通常の復元と同じ経路を通すために保存してから読み戻す
+  lsSet(LS_SETTINGS, {values: payload.values, mode: payload.mode,
+                      rainMode: payload.rainMode, view: payload.view});
+  history.replaceState(null, '', location.pathname);   // 再読み込みで二重に適用しない
+  return true;
+}
+
+async function copyText(text, okMsg){
+  try {
+    await navigator.clipboard.writeText(text);
+    setStatus(okMsg);
+    return true;
+  } catch(e){
+    // クリップボードが使えない環境（http、権限拒否など）では、選択してコピーできる形で出す
+    const box = $('shareOut');
+    box.innerHTML = '<p class="hint">コピーできませんでした。下の枠を選んでコピーしてください。</p>';
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.rows = 4;
+    ta.style.cssText = 'width:100%;font:inherit;font-size:11px;padding:6px;border:1px solid var(--border);border-radius:5px';
+    box.appendChild(ta);
+    ta.select();
+    return false;
+  }
+}
+
+// 既に開いているタブに共有リンクを貼られた場合、URLの違いがハッシュだけだと
+// 同一文書内の移動になって読み込みが走らない。取り込みは起動時の処理に任せたいので、
+// 共有リンクのハッシュが付いたときだけ明示的に読み込み直す。
+window.addEventListener('hashchange', () => {
+  if (/[#&]s=/.test(location.hash)) location.reload();
+});
+
+$('btnShareUrl').addEventListener('click', () => {
+  copyText(buildShareUrl(), 'リンクをコピーしました。地点の座標が含まれるので、送る相手にご注意ください。');
+});
+
+/* --- 文字のまとめ --- */
+function shareSummaryLines(){
+  const p = activePlace();
+  const now = new Date();
+  const stamp = `${now.getFullYear()}/${now.getMonth()+1}/${now.getDate()} ${fmtClock(now)}`;
+  const lines = [`【浸水予測シミュレーター 備えのまとめ】${stamp} 時点`];
+  if (!p || !grid){
+    lines.push('地点が未登録、または地形が未取得です。');
+    return lines;
+  }
+  const i = cellIndexAt(p.lat, p.lng);
+  lines.push(`地点: ${p.name}（標高 ${i >= 0 ? grid.elev[i].toFixed(1) : '—'} m ／ 床 +${p.floorCm} cm）`);
+  if (i >= 0){
+    const depth = grid.water[i];
+    const floor = floorState(depth, p.floorCm);
+    lines.push(`内水の予測: ${depth >= 0.01 ? fmtDepth(depth) : '浸水なし'}（${floor.label}）`);
+    const flow = inflowAt(i);
+    if (flow && flow.name) lines.push(`水が入ってくる向き: ${flow.name}側`);
+    for (const c of crossingsOf(leadTimes && leadTimes.placeId === p.id ? leadTimes : null))
+      lines.push(c.at ? `${fmtClock(c.at)}ごろ ${c.label}` : `${c.label}: 予報の範囲では達しない見込み`);
+    const acts = actionsFor(depth, floor.floorDepth, flow && flow.name);
+    if (acts.length){                       // 手順が無いときは見出しだけ残さない
+      lines.push('', '今からやること:');
+      for (const a of acts) lines.push(`・${a}`);
+    }
+  }
+  const hz = $('hazardVerdict').innerText.trim();
+  if (hz) lines.push('', '外水（河川・高潮）: ' + hz.split('\n')[0]);
+  const ev = $('evacResult').innerText.trim();
+  if (ev){
+    // 「方角へ◯m／標高+◯m」と、その次の行の外水判定を1行にまとめる
+    const evLines = ev.split('\n').map(s => s.trim()).filter(Boolean);
+    lines.push('', '車の退避先の候補:');
+    for (let k = 1; k < evLines.length && lines.length < 40; k += 2){
+      if (!/^[北南東西]/.test(evLines[k])) break;
+      lines.push(`・${evLines[k]}（${evLines[k+1] || '—'}）`);
+    }
+  }
+  lines.push('', '※内水氾濫の概算です。避難の判断は自治体と気象庁の公式情報に従ってください。');
+  return lines;
+}
+
+$('btnShareText').addEventListener('click', () => {
+  copyText(shareSummaryLines().join('\n'), 'まとめの文字をコピーしました。');
+});
+
+/* --- まとめ画像 --- */
+function wrapLines(g, text, maxW){
+  const out = [];
+  for (const para of text.split('\n')){
+    if (!para){ out.push(''); continue; }
+    let line = '';
+    for (const ch of para){
+      if (g.measureText(line + ch).width > maxW && line){ out.push(line); line = ch; }
+      else line += ch;
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+function buildSummaryImage(){
+  const W = 720, pad = 28, THUMB_MAX_H = 260;
+  const lines = shareSummaryLines();
+  const probe = document.createElement('canvas').getContext('2d');
+  probe.font = '15px "Segoe UI","Hiragino Sans","Yu Gothic UI",sans-serif';
+  const wrapped = wrapLines(probe, lines.slice(1).join('\n'), W - pad*2);
+
+  // 図の寸法を先に決めてから全体の高さを出す。あとで別に計算すると余白や見切れが出る。
+  let tw = 0, th = 0;
+  if (grid && overlay.width){
+    tw = W - pad*2;
+    th = tw * (overlay.height / overlay.width);
+    if (th > THUMB_MAX_H){ th = THUMB_MAX_H; tw = th * (overlay.width / overlay.height); }
+  }
+  const H = pad + 30 + 10 + (th ? th + 16 : 0) + wrapped.length * 23 + pad;
+
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, H);
+
+  g.fillStyle = '#1a2733';
+  g.font = 'bold 19px "Segoe UI","Hiragino Sans","Yu Gothic UI",sans-serif';
+  g.textBaseline = 'top';
+  g.fillText(lines[0], pad, pad);
+
+  // 取得エリアの水位図をそのまま縮小して貼る（同一オリジンのキャンバスなので描き出せる）
+  let y = pad + 30 + 10;
+  if (th){
+    g.fillStyle = '#eef2f6';
+    g.fillRect(pad, y, tw, th);
+    g.imageSmoothingEnabled = true;
+    g.drawImage(overlay, pad, y, tw, th);
+    g.strokeStyle = '#d7dee5'; g.lineWidth = 1;
+    g.strokeRect(pad + .5, y + .5, tw - 1, th - 1);
+    const p = activePlace();
+    if (p){
+      const i = cellIndexAt(p.lat, p.lng);
+      if (i >= 0){
+        const r = (i / grid.cols) | 0, c = i - r*grid.cols;
+        const mx = pad + (c + 0.5) / grid.cols * tw, my = y + (r + 0.5) / grid.rows * th;
+        g.strokeStyle = '#c62828'; g.lineWidth = 3;
+        g.beginPath(); g.arc(mx, my, 7, 0, Math.PI*2); g.stroke();
+      }
+    }
+    y += th + 16;
+  }
+
+  g.font = '15px "Segoe UI","Hiragino Sans","Yu Gothic UI",sans-serif';
+  for (const line of wrapped){
+    g.fillStyle = line.startsWith('※') ? '#5b6b7a' : '#1a2733';
+    g.fillText(line, pad, y);
+    y += 23;
+  }
+  return cv;
+}
+
+$('btnShareImage').addEventListener('click', () => {
+  const cv = buildSummaryImage();
+  const url = cv.toDataURL('image/png');
+  const box = $('shareOut');
+  box.innerHTML = '';
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '浸水予測まとめ.png';
+  a.textContent = '画像を保存';
+  a.className = 'share-dl';
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = '備えのまとめ';
+  img.className = 'share-img';
+  const note = document.createElement('p');
+  note.className = 'hint';
+  note.textContent = '保存できない場合は、下の画像を長押し（右クリック）して保存してください。';
+  box.append(a, note, img);
+  setStatus('まとめ画像を作成しました。');
+});
+
 /* ================= 操作値と表示位置の永続化 ================= */
 const SETTING_IDS = ['baseMap','rrim','rrimOp','radarShow','radarOp','terrainViz','vizGain',
   'tex3d','texRes','exag3d','rainRate','rainDur','sewerPreset','sewerRate','sewerStore',
@@ -5274,6 +5505,8 @@ function restoreSettings(){
    その moveend が、変えなければ末尾の fire が拾う（captureTerrain 側で多重実行は防がれる）。 */
 function bootRestore(){
   loadPlaces();
+  // 共有リンクで開かれた場合は、その中身を手元の保存より優先して取り込む
+  if (applyShareUrl()) loadPlaces();
   const saved = restoreSettings();
   // 床の高さの入力欄は、保存された既定値ではなく選択中の地点の値に合わせる
   const p = activePlace();
