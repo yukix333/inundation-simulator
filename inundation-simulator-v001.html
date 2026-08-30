@@ -764,6 +764,13 @@ svg.leaflet-image-layer.leaflet-interactive path {
   .place-pin{width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;
     border:3px solid var(--accent);background:#fff;box-shadow:0 1px 5px rgba(0,0,0,.4)}
   .place-pin.sel{border-color:var(--danger);background:#fff4f4;transform:scale(1.25)}
+  /* 退避先候補のピン。マイ地点と区別できるよう四角＋Pにする */
+  .evac-pin{width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:4px;
+    border:2px solid #1b7f3b;background:#e8f6ec;color:#1b7f3b;font-size:12px;font-weight:700;
+    line-height:16px;text-align:center;box-shadow:0 1px 5px rgba(0,0,0,.35)}
+  .vacts.ev li{margin-bottom:6px}
+  .ev-ok {color:#1b7f3b;font-weight:600}
+  .ev-bad{color:var(--danger);font-weight:600}
 
   #legend{position:absolute;left:10px;bottom:24px;z-index:800;background:rgba(255,255,255,.92);
     border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:11px;display:none}
@@ -931,8 +938,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <p class="hint">登録した地点はこの端末のブラウザにのみ保存され、外部へは送信されません。地点をタップすると選択され、以降の判定はその地点について行われます。<br>
         床の高さは、玄関の地面から床までの段差の合計です（分からなければ既定の45cmのままで構いません）。</p>
       <div class="btnrow" style="margin-top:8px">
+        <button id="btnEvacSpots">車の退避先を探す</button>
         <button id="btnPlaceDel">選択中の地点を削除</button>
       </div>
+      <div id="evacResult"></div>
     </div>
 
     <div class="sec" id="secHazard">
@@ -5066,6 +5075,147 @@ map.on('move moveend zoomend resize viewreset', drawFlowArrows);
 // ズームアニメ中はタイルだけが拡大され、画面座標のこのキャンバスは追随できない。
 // そのまま残すと矢印が地形からずれて見えるので、アニメの間は消して zoomend で描き直す。
 map.on('zoomstart', () => fctx.clearRect(0, 0, flowCanvas.width, flowCanvas.height));
+
+
+/* ================= 車の退避先の候補 =================
+   「車をどこへ動かすか」は、前日の備えでいちばん具体的で、いちばん間に合わなくなる行動。
+   標高データと計算済みの浸水深はすでに手元にあるので、そこから
+   「近くて・高くて・浸からない」場所を機械的に拾い出す。
+
+   これは地形から出した方角と距離の目安であって、駐車できる場所の案内ではない。
+   実際に止める場所は、駐車の可否を確かめて自分で決める必要がある。
+   探索できるのは地形を取得した範囲（＝地図の表示範囲）に限られる。 */
+const EVAC_MAX_SPOTS   = 5;
+const EVAC_POOL        = 12;     // 外水の照会をしてから絞るので、候補は多めに拾っておく
+const EVAC_MIN_DIST_M  = 120;    // これより近いと避難の意味が薄い
+const EVAC_SEPARATION_M= 300;    // 候補どうしを離し、同じ場所を5個返さないようにする
+const EVAC_DRY_M       = 0.05;   // これ未満の浸水深を「浸からない」とみなす
+const EVAC_MIN_GAIN_M  = 1.0;    // 地点よりこれだけ高いことを求める
+
+let evacMarkers = [];
+
+function clearEvacMarkers(){
+  for (const mk of evacMarkers) map.removeLayer(mk);
+  evacMarkers = [];
+}
+
+/* セル番号 → 緯度経度（セル中心）。標高を読んだときと同じワールドpx座標系で戻す。 */
+function cellLatLng(i){
+  const {cols, rows, px} = grid;
+  const r = (i / cols) | 0, c = i - r*cols;
+  const wx = px.x0 + (c + 0.5) / cols * (px.x1 - px.x0);
+  const wy = px.y0 + (r + 0.5) / rows * (px.y1 - px.y0);
+  const lng = wx / worldPx(DEM_Z) * 360 - 180;
+  const k = Math.PI * (1 - 2 * wy / worldPx(DEM_Z));
+  const lat = Math.atan(Math.sinh(k)) * 180 / Math.PI;
+  return [lat, lng];
+}
+
+async function findEvacSpots(){
+  const p = activePlace();
+  const box = $('evacResult');
+  if (!p){ box.innerHTML = '<div class="verdict lv-safe">先に地点を登録してください。</div>'; return; }
+  if (!grid){ box.innerHTML = '<div class="verdict lv-safe">先に地形を取得してください。</div>'; return; }
+  const home = cellIndexAt(p.lat, p.lng);
+  if (home < 0){
+    box.innerHTML = '<div class="verdict lv-safe">地点が地形の取得エリア外です。地図をこの地点の周辺へ動かしてください。</div>';
+    return;
+  }
+  $('btnEvacSpots').disabled = true;
+  box.innerHTML = '<div class="verdict lv-safe">退避先を探しています…</div>';
+
+  const {cols, rows, cellM, elev, water} = grid;
+  const hr = (home / cols) | 0, hc = home - hr*cols;
+  const baseElev = elev[home];
+  const hasWater = water.some(v => v > EVAC_DRY_M);
+
+  const found = [];
+  for (let r = 0; r < rows; r++){
+    for (let c = 0; c < cols; c++){
+      const i = r*cols + c;
+      if (water[i] >= EVAC_DRY_M) continue;
+      const gain = elev[i] - baseElev;
+      if (gain < EVAC_MIN_GAIN_M) continue;
+      const dist = Math.hypot(c - hc, r - hr) * cellM;
+      if (dist < EVAC_MIN_DIST_M) continue;
+      found.push({i, dist, gain, r, c});
+    }
+  }
+  // 近い順。同じ場所に固まらないよう、既に採った候補から一定距離を空けて拾う。
+  found.sort((a, b) => a.dist - b.dist);
+  const pool = [];
+  for (const f of found){
+    if (pool.length >= EVAC_POOL) break;
+    if (pool.some(q => Math.hypot(q.c - f.c, q.r - f.r) * cellM < EVAC_SEPARATION_M)) continue;
+    pool.push(f);
+  }
+
+  if (!pool.length){
+    $('btnEvacSpots').disabled = false;
+    box.innerHTML = '<div class="verdict lv-warn"><div class="vtitle">この範囲に退避先が見つかりません</div>' +
+      `<p class="vnote">地形を取得した範囲の中に、${p.name}より${EVAC_MIN_GAIN_M.toFixed(0)} m以上高くて` +
+      '浸水しない場所がありませんでした。地図をもっと広い範囲、または高台のある方向へ動かしてから' +
+      'もう一度探してください。低地が一面に広がる地域では、車の退避先は地形からは見つかりません。</p></div>';
+    clearEvacMarkers();
+    return;
+  }
+
+  // 候補プール全体に外水を照会してから絞る。内水で浸からなくても外水の区域内なら
+  // 退避先として意味が薄いので、距離より先に「区域外かどうか」で並べ替える。
+  const outerSpecs = HAZARD_LAYERS.filter(s => s.id === 'hzFlood' || s.id === 'hzHightide');
+  await Promise.all(pool.map(async f => {
+    const [lat, lng] = cellLatLng(f.i);
+    f.lat = lat; f.lng = lng;
+    try {
+      const hits = await Promise.all(outerSpecs.map(s => hazardHitAt(s, lat, lng)));
+      f.outerRisk = hits.some(Boolean);
+    } catch(e){ f.outerRisk = null; }        // 照会できなければ「不明」として出す
+  }));
+  pool.sort((a, b) => (a.outerRisk === true) - (b.outerRisk === true) || a.dist - b.dist);
+  const picked = pool.slice(0, EVAC_MAX_SPOTS);
+  const allRisky = picked.every(f => f.outerRisk === true);
+
+  clearEvacMarkers();
+  for (const f of picked){
+    const mk = L.marker([f.lat, f.lng], {
+      icon: L.divIcon({className: '', html: '<div class="evac-pin">P</div>', iconSize: [0, 0]}),
+      keyboard: false,
+      title: `退避先候補: 標高 +${f.gain.toFixed(1)} m`
+    }).addTo(map);
+    evacMarkers.push(mk);
+  }
+
+  const rows2 = picked.map(f => {
+    const name = compassName(f.c - hc, hr - f.r) || '—';   // 行が増える向きが南
+    const risk = f.outerRisk === null ? '<span class="vmeta">外水は照会できず</span>'
+      : f.outerRisk ? '<span class="ev-bad">外水の想定区域内</span>'
+      : '<span class="ev-ok">外水の想定区域外</span>';
+    return `<li><b>${escapeHtml(name)}へ ${Math.round(f.dist)} m</b>` +
+      `<span class="vmeta">／ 標高 +${f.gain.toFixed(1)} m</span><br>${risk}</li>`;
+  }).join('');
+
+  $('btnEvacSpots').disabled = false;
+  box.innerHTML = '<div class="verdict lv-' + (allRisky ? 'warn' : 'safe') + '">' +
+    '<div class="vtitle">車の退避先の候補</div>' +
+    (allRisky ? '<p class="vnote"><b>候補がすべて外水（河川・高潮）の想定区域内です。</b>' +
+      'この範囲で車を動かしても、河川が氾濫すれば同じように浸水します。区域の外へ' +
+      '出すか、立体駐車場の上層階など高さのある場所を検討してください。</p>' : '') +
+    '<ol class="vacts ev">' + rows2 + '</ol>' +
+    '<p class="vnote">' +
+    (hasWater ? '計算済みの浸水深で浸からず、' : '浸水の計算がまだなので標高だけで選んでいます。') +
+    `${p.name}より${EVAC_MIN_GAIN_M.toFixed(0)} m以上高い場所を、近い順に選びました。` +
+    '<b>これは地形から出した方角と距離の目安で、駐車できる場所の案内ではありません。</b>' +
+    '実際に止める場所は駐車の可否を確かめて決めてください。探索できるのは地形を取得した' +
+    '範囲だけなので、地図を広げるともっと良い候補が見つかることがあります。</p></div>';
+}
+
+$('btnEvacSpots').addEventListener('click', () => {
+  findEvacSpots().catch(e => {
+    $('btnEvacSpots').disabled = false;
+    $('evacResult').innerHTML = '<div class="verdict lv-caution">退避先の探索に失敗しました: ' +
+      escapeHtml(e.message) + '</div>';
+  });
+});
 
 /* ================= 操作値と表示位置の永続化 ================= */
 const SETTING_IDS = ['baseMap','rrim','rrimOp','radarShow','radarOp','terrainViz','vizGain',
