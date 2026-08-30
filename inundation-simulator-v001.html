@@ -742,6 +742,11 @@ svg.leaflet-image-layer.leaflet-interactive path {
   .vacts-h{margin-top:8px;font-weight:700;font-size:12px}
   .vacts{margin:3px 0 0;padding-left:1.35em;font-size:12px;line-height:1.55}
   .vacts li{margin-bottom:3px}
+  .vacts.lt{list-style:none;padding-left:0;font-variant-numeric:tabular-nums}
+  .vacts.lt .vmeta{margin-left:4px}
+  .vacts.lt .lt-none{color:var(--muted)}
+  /* 予報の推移グラフ。パネル幅に合わせて縮む */
+  #fcstChart{width:100%;height:auto;margin-top:8px;border:1px solid var(--border);border-radius:6px;background:#fff}
   #placeList{margin-bottom:8px}
   #placeList:empty{display:none}
   .place{display:flex;align-items:center;gap:6px;margin-bottom:6px;padding:6px 8px;font-size:12px;
@@ -1021,7 +1026,8 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <h2>2. 降雨条件</h2>
       <div class="modes">
         <button id="rainManual" class="sel">手動設定</button>
-        <button id="rainRadarBtn">気象庁レーダー</button>
+        <button id="rainRadarBtn">レーダー実況</button>
+        <button id="rainFcstBtn">短時間予報</button>
       </div>
       <div id="manualRain">
         <div class="row">
@@ -1049,6 +1055,13 @@ svg.leaflet-image-layer.leaflet-interactive path {
           <output id="radarTimeOut">—</output>
         </div>
         <p class="hint" id="radarInfo">地形を取得してから「雨雲データを取得」を押すと、対象エリアの実際の雨雲（気象庁 高解像度降水ナウキャスト）を読み込みます。実況の過去1時間から予報の1時間先まで、5分刻みで選べます。</p>
+      </div>
+      <div id="fcstRain" style="display:none">
+        <div class="btnrow">
+          <button id="btnForecast" disabled>予報を取得</button>
+        </div>
+        <canvas id="fcstChart" width="560" height="150" style="display:none"></canvas>
+        <p class="hint" id="fcstInfo">地形を取得してから「予報を取得」を押すと、気象庁の降水短時間予報（最大15時間先）を対象エリアぶん読み込みます。「予測を実行」すると、この予報どおりに降ったときの浸水深と、選択中の地点が各段階に達する時刻を計算します。</p>
       </div>
       <div class="row" style="margin-top:12px">
         <label for="sewerPreset">下水道整備水準</label>
@@ -3128,7 +3141,11 @@ async function captureTerrain(){
   $('btnClear').disabled = false;
   $('btn3d').disabled = false;
   $('btnRadar').disabled = false;
+  $('btnForecast').disabled = false;
   radarFrames = null;                      // エリアが変わったら雨雲データを取り直す
+  forecastFrames = null;                   // 予報も同じくエリア依存なので取り直す
+  leadTimes = null;
+  drawForecastChart();
   $('radarTime').disabled = true;
   $('radarTimeOut').textContent = '—';
   $('stRes').textContent = `${cols}×${rows} セル (約${cellM.toFixed(0)}m/セル)`;
@@ -3500,12 +3517,15 @@ function setRainMode(m){
   rainMode = m;
   $('rainManual').classList.toggle('sel', m === 'manual');
   $('rainRadarBtn').classList.toggle('sel', m === 'radar');
-  $('manualRain').style.display = m === 'manual' ? '' : 'none';
-  $('radarRain').style.display  = m === 'radar'  ? '' : 'none';
+  $('rainFcstBtn').classList.toggle('sel', m === 'forecast');
+  $('manualRain').style.display = m === 'manual'   ? '' : 'none';
+  $('radarRain').style.display  = m === 'radar'    ? '' : 'none';
+  $('fcstRain').style.display   = m === 'forecast' ? '' : 'none';
   updateRadarLayer();
 }
 $('rainManual').addEventListener('click', () => setRainMode('manual'));
 $('rainRadarBtn').addEventListener('click', () => setRainMode('radar'));
+$('rainFcstBtn').addEventListener('click', () => setRainMode('forecast'));
 
 /* ================= シミュレーション本体 ================= */
 function getParams(){
@@ -4071,7 +4091,9 @@ function runQuick(){
 $('btnRun').addEventListener('click', () => {
   if (!grid) return;
   resetHydrology(); simTime = 0;
-  if (mode === 'quick') runQuick();
+  // 短時間予報は時刻ごとに解いて到達時刻まで出すので、専用の計算に分ける
+  if (rainMode === 'forecast' && forecastFrames) runForecastTimeline();
+  else if (mode === 'quick') runQuick();
   else startLoop();
 });
 $('btnClear').addEventListener('click', () => {
@@ -4423,7 +4445,7 @@ function updatePlaceVerdict(){
 
   if (depth < 0.01){
     box.innerHTML = '<div class="verdict lv-safe">' + head +
-      '<div class="vtitle">' + ground.label + '</div>' +
+      '<div class="vtitle">' + ground.label + '</div>' + leadTimeHtml() +
       '<p class="vnote">この結果は、降った雨が地形の窪地にたまる内水氾濫だけを見たものです。' +
       '河川の氾濫（外水）は計算に入っていないので、必ずハザードマップも確認してください。</p></div>';
     return;
@@ -4439,6 +4461,7 @@ function updatePlaceVerdict(){
     '<div class="vtitle">' + escapeHtml(floor.label) + '</div>' +
     '<div class="vdepth">予測浸水深 <b>' + fmtDepth(depth) + '</b>（' + floorTxt + '）</div>' +
     (ground.note ? '<p class="vnote">' + escapeHtml(ground.label) + '。' + escapeHtml(ground.note) + '</p>' : '') +
+    leadTimeHtml() +
     '<div class="vacts-h">今からやること</div><ol class="vacts">' + acts + '</ol>' +
     '<p class="vnote">内水氾濫のみの計算です。河川の氾濫（外水）は含みません。</p></div>';
 }
@@ -4562,6 +4585,303 @@ async function updateHazardVerdict(){
     '河川の氾濫で浸水します。避難の判断は自治体の避難情報と公式ハザードマップに従ってください。</p></div>';
 }
 
+
+
+/* ================= 降水短時間予報とリードタイム =================
+   ナウキャストは1時間先までしか無く、「前日〜数時間前の備え」には届かない。
+   気象庁の降水短時間予報（rasrf）は最大15時間先まであるので、こちらを取り込み、
+   各予報時刻までの累積雨量で簡易水位法を解いて、地点の浸水深の時系列を作る。
+
+   そこから「何時ごろ道路が冠水するか」「車を動かせるのはいつまでか」という
+   到達時刻＝リードタイムを出す。前日の備えで最後に要るのは深さではなく期限のため。
+
+   予報は1時間刻みで配信される（実測。時間帯によっては細かい刻みも混ざる）ので、
+   フレームの持続時間は次のフレームまでの間隔から求め、刻み幅の変化に追随させる。 */
+const RASRF_BASE = 'https://www.jma.go.jp/bosai/jmatile/data/rasrf/';
+const RASRF_Z = 10;                 // ナウキャストと同じズーム(約125m/px)
+const FORECAST_MAX_FRAMES = 16;     // 取り込むフレーム数の上限(通信量と計算時間の歯止め)
+
+let forecastFrames = null;   // [{validtime, at:Date, stepSec, rain:Float32Array, max, mean}]
+let leadTimes = null;        // {placeId, base:Date, series:[{at, depth}], crossings:[...]}
+
+/* "YYYYMMDDhhmmss"(UTC) を Date に直す */
+function jmaTimeToDate(s){
+  return new Date(Date.UTC(+s.slice(0,4), +s.slice(4,6) - 1, +s.slice(6,8),
+                           +s.slice(8,10), +s.slice(10,12), +(s.slice(12,14) || 0)));
+}
+const fmtClock = d => String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+function fmtLead(ms){
+  const mn = Math.max(0, Math.round(ms / 60000));
+  return mn < 60 ? `約${mn}分後` : `約${Math.floor(mn/60)}時間${String(mn%60).padStart(2,'0')}分後`;
+}
+
+async function loadForecast(){
+  if (!grid) return;
+  $('btnForecast').disabled = true;
+  try {
+    setStatus('降水短時間予報の時刻一覧を取得中…');
+    const list = await fetch(RASRF_BASE + 'targetTimes.json').then(r => r.json());
+    // 同じ予報時刻が複数の発表時刻から配信されるので、最も新しい発表のものを採る
+    const best = new Map();
+    for (const e of list){
+      const cur = best.get(e.validtime);
+      if (!cur || e.basetime > cur.basetime) best.set(e.validtime, e);
+    }
+    const now = Date.now();
+    const future = [...best.values()]
+      .filter(e => jmaTimeToDate(e.validtime).getTime() > now)
+      .sort((a, b) => a.validtime.localeCompare(b.validtime))
+      .slice(0, FORECAST_MAX_FRAMES);
+    if (!future.length) throw new Error('先の時刻の予報が配信されていません');
+
+    const b = grid.bounds;
+    const x0 = lngToX(b.getWest(), RASRF_Z),  x1 = lngToX(b.getEast(), RASRF_Z);
+    const y0 = latToY(b.getNorth(), RASRF_Z), y1 = latToY(b.getSouth(), RASRF_Z);
+    const pxW = x1 - x0, pxH = y1 - y0;
+    const txMin = Math.floor(x0/256), txMax = Math.floor(x1/256);
+    const tyMin = Math.floor(y0/256), tyMax = Math.floor(y1/256);
+    const mw = (txMax-txMin+1)*256, mh = (tyMax-tyMin+1)*256;
+    const mc = document.createElement('canvas');
+    mc.width = mw; mc.height = mh;
+    const mctx = mc.getContext('2d', {willReadFrequently: true});
+    mctx.imageSmoothingEnabled = false;      // 補間すると凡例の色が壊れる
+
+    const {cols, rows} = grid;
+    const frames = [];
+    for (let fi = 0; fi < future.length; fi++){
+      const t = future[fi];
+      setStatus(`降水短時間予報を取得中… ${fi+1}/${future.length}`);
+      mctx.clearRect(0, 0, mw, mh);
+      const jobs = [];
+      for (let ty = tyMin; ty <= tyMax; ty++)
+        for (let tx = txMin; tx <= txMax; tx++)
+          jobs.push(loadImg(`${RASRF_BASE}${t.basetime}/none/${t.validtime}/surf/rasrf/${RASRF_Z}/${tx}/${ty}.png`)
+            .then(img => { if (img) mctx.drawImage(img, (tx-txMin)*256, (ty-tyMin)*256); }));
+      await Promise.all(jobs);
+      const px = mctx.getImageData(0, 0, mw, mh).data;
+      const rain = new Float32Array(cols*rows);
+      let max = 0, sum = 0;
+      for (let r = 0; r < rows; r++){
+        const py = Math.min(mh-1, Math.max(0, Math.round(y0 + (r+0.5)/rows*pxH - tyMin*256)));
+        for (let c = 0; c < cols; c++){
+          const pxx = Math.min(mw-1, Math.max(0, Math.round(x0 + (c+0.5)/cols*pxW - txMin*256)));
+          const v = decodeRain(px, (py*mw + pxx)*4);   // 凡例はナウキャストと共通
+          rain[r*cols + c] = v;
+          if (v > max) max = v;
+          sum += v;
+        }
+      }
+      frames.push({validtime: t.validtime, at: jmaTimeToDate(t.validtime),
+                   rain, max, mean: sum/(cols*rows), stepSec: 3600});
+    }
+    // 各フレームが受け持つ時間 = 次のフレームまでの間隔（最後は直前と同じ間隔とみなす）
+    for (let i = 0; i < frames.length; i++){
+      frames[i].stepSec = i + 1 < frames.length
+        ? Math.max(60, Math.round((frames[i+1].at - frames[i].at) / 1000))
+        : (i > 0 ? frames[i-1].stepSec : 3600);
+    }
+    forecastFrames = frames;
+    leadTimes = null;
+    drawForecastChart();
+    const hours = frames.reduce((s, f) => s + f.stepSec, 0) / 3600;
+    const total = frames.reduce((s, f) => s + f.mean * f.stepSec / 3600, 0);
+    $('fcstInfo').textContent =
+      `${fmtClock(frames[0].at)}〜${fmtClock(frames[frames.length-1].at)} の${frames.length}フレーム` +
+      `（約${hours.toFixed(0)}時間先まで）。エリア平均の予想総雨量 ${total.toFixed(0)} mm、` +
+      `最大の雨の強さ ${Math.max(...frames.map(f => f.max)).toFixed(0)} mm/h。` +
+      `「予測を実行」で、この予報どおりに降ったときの浸水と到達時刻を計算します。`;
+    setStatus(`降水短時間予報を取得しました（${frames.length}フレーム）。`);
+  } catch (e){
+    setStatus('降水短時間予報の取得に失敗しました: ' + e.message, true);
+  } finally {
+    $('btnForecast').disabled = !grid;
+  }
+}
+$('btnForecast').addEventListener('click', loadForecast);
+
+/* ================= 到達時刻（リードタイム） =================
+   各予報時刻までの累積雨量で簡易水位法を解き、選択中の地点の深さの時系列を得る。
+   1回の充填計算が0.1〜0.2秒かかるので、1フレームずつ schedule で回して画面を止めない。 */
+
+// 到達を知らせる段階。地面からの深さで決まるものと、床の高さからの深さで決まるものがある。
+function leadTimeSteps(floorCm){
+  return [
+    {depth: 0.10,               label: '道路が冠水する'},
+    {depth: 0.30,               label: '車の移動が危険になる'},
+    {depth: floorCm / 100,      label: '床上浸水に達する'},
+    {depth: floorCm / 100 + 1.0, label: '1階のほぼ全体が水没する'}
+  ].filter(s => s.depth >= 0.05).sort((a, b) => a.depth - b.depth);
+}
+
+function runForecastTimeline(){
+  const p = activePlace();
+  const {cols, rows, cellArea, volume, infilRate} = grid;
+  const flowElev = grid.flowElev || grid.elev;
+  const n = cols * rows;
+  const params = getParams();
+  const gen = gridGen;
+  const idx = p ? cellIndexAt(p.lat, p.lng) : -1;
+
+  // 地表に残っている水量[m3]。フレーム間で持ち越し、各フレームでは「その時間に降った分」を
+  // 足して「その時間に処理できる分」だけ引く。runQuick のように開始からの経過時間ぶんを
+  // まとめて引くと、雨の降っていない時間帯にも処理能力が貯まり、浸水しない側へ大きく偏るため。
+  const V = new Float64Array(n);
+  const storeLeft = new Float64Array(n).fill(params.sewerStore * cellArea);  // 管内・調整池の残容量
+  const series = [];
+  let elapsed = 0, grossRain = 0, infiltrationVolume = 0, sewerVolume = 0;
+  let peak = null;      // 期間中で地表水量が最大になった時点 {total, depth, at, elapsed, 収支}
+
+  $('btnRun').disabled = true;
+  $('progress').style.display = 'block';
+
+  const stepOnce = (fi) => {
+    if (gen !== gridGen){ $('progress').style.display = 'none'; $('btnRun').disabled = !grid; return; }
+    const f = forecastFrames[fi];
+    elapsed += f.stepSec;
+    const capSewer = params.sewerRate * f.stepSec * cellArea;   // この時間で処理できる量
+    for (let i = 0; i < n; i++){
+      const add = f.rain[i] * MMH_TO_MS * f.stepSec * cellArea;
+      grossRain += add;
+      let v = V[i] + add;
+      const toStore = v < storeLeft[i] ? v : storeLeft[i];      // まず貯留が吸う
+      storeLeft[i] -= toStore; v -= toStore; sewerVolume += toStore;
+      const capInfil = infilRate[i] * f.stepSec * cellArea;
+      const toInfil = v < capInfil ? v : capInfil;
+      v -= toInfil; infiltrationVolume += toInfil;
+      const toSewer = v < capSewer ? v : capSewer;
+      v -= toSewer; sewerVolume += toSewer;
+      V[i] = v;
+    }
+    $('progressPct').textContent = `到達時刻を計算中 ${fi+1}/${forecastFrames.length}`;
+
+    const depth = fillSpillMerge(flowElev, cols, rows, V, cellArea, params.edgeDrain);
+    series.push({at: f.at, depth: idx >= 0 ? depth[idx] : 0});
+
+    // 通り過ぎる雨では最終フレームは引いた後になり、地図が「浸水なし」に見えてしまう。
+    // 備えの判断に要るのは最大どこまで浸かるかなので、期間中のピーク時点を残す。
+    let total = 0;
+    for (let i = 0; i < n; i++) total += depth[i];
+    if (!peak || total > peak.total){
+      peak = {total, depth, at: f.at, elapsed,
+              rain: grossRain, infiltration: infiltrationVolume, sewer: sewerVolume};
+    }
+
+    if (fi + 1 < forecastFrames.length){
+      schedule(() => stepOnce(fi + 1));
+      return;
+    }
+    // ピーク時点の水位を地図・統計へ反映する
+    let retained = 0;
+    for (let i = 0; i < n; i++){ volume[i] = peak.depth[i] * cellArea; retained += volume[i]; }
+    syncWaterFromVolume();
+    simTime = peak.elapsed;
+    grid.waterBalance = {before: 0, rain: peak.rain,
+      infiltration: peak.infiltration, sewer: peak.sewer,
+      edge: peak.rain - peak.infiltration - peak.sewer - retained,
+      after: retained, error: 0};
+
+    leadTimes = p ? {placeId: p.id, series, steps: leadTimeSteps(p.floorCm), peakAt: peak.at} : null;
+    $('progress').style.display = 'none';
+    $('btnRun').disabled = false;
+    renderWater();
+    updateStats();        // 内部で updatePlaceVerdict を呼び、到達時刻も一緒に描かれる
+    drawForecastChart();
+    setStatus(`降水短時間予報にもとづく計算が完了しました（${forecastFrames.length}フレーム、` +
+      `${(elapsed/3600).toFixed(0)}時間ぶん）。地図は最も浸水が大きくなる ${fmtClock(peak.at)} ごろの状態です。`);
+  };
+  schedule(() => stepOnce(0));
+}
+
+/* 深さの時系列から、各段階に達する時刻を線形補間で求める。 */
+function crossingsOf(lt){
+  if (!lt) return [];
+  const out = [];
+  for (const step of lt.steps){
+    let hit = null;
+    for (let i = 0; i < lt.series.length; i++){
+      if (lt.series[i].depth < step.depth) continue;
+      if (i === 0){ hit = lt.series[0].at; break; }
+      const a = lt.series[i-1], b = lt.series[i];
+      const t = (step.depth - a.depth) / (b.depth - a.depth || 1);
+      hit = new Date(+a.at + (b.at - a.at) * Math.max(0, Math.min(1, t)));
+      break;
+    }
+    out.push({...step, at: hit});
+  }
+  return out;
+}
+
+/* 判定カードに足す、到達時刻の一覧。到達しない段階も「達しない見込み」として出す。 */
+function leadTimeHtml(){
+  const p = activePlace();
+  if (!leadTimes || !p || leadTimes.placeId !== p.id) return '';
+  const now = Date.now();
+  const rows = crossingsOf(leadTimes).map(c => c.at
+    ? `<li><b>${fmtClock(c.at)}</b> ごろ ${escapeHtml(c.label)}<span class="vmeta">（${fmtLead(c.at - now)}）</span></li>`
+    : `<li class="lt-none">${escapeHtml(c.label)}: この予報の範囲では達しない見込み</li>`).join('');
+  const last = leadTimes.series[leadTimes.series.length - 1];
+  const peakTxt = leadTimes.peakAt
+    ? `浸水が最も大きくなるのは <b>${fmtClock(leadTimes.peakAt)}</b> ごろで、上の浸水深はその時点の値です。` : '';
+  return '<div class="vacts-h">到達時刻の見通し（降水短時間予報）</div>' +
+    '<ul class="vacts lt">' + rows + '</ul>' +
+    `<p class="vnote">${peakTxt}${fmtClock(last.at)} までの予報にもとづく計算です。予報は更新されるので、` +
+    '時間をおいて取り直してください。到達時刻は内水氾濫だけのもので、河川の氾濫は含みません。</p>';
+}
+
+/* エリア平均の雨の強さと、地点の深さの推移を1枚に描く。 */
+function drawForecastChart(){
+  const cv = $('fcstChart');
+  if (!forecastFrames || !forecastFrames.length){ cv.style.display = 'none'; return; }
+  cv.style.display = 'block';
+  const g = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  const padL = 34, padR = 34, padT = 12, padB = 24;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  g.clearRect(0, 0, W, H);
+
+  const rainMax = Math.max(5, ...forecastFrames.map(f => f.mean));
+  const bw = plotW / forecastFrames.length;
+  g.font = '11px sans-serif';
+  g.textBaseline = 'top';
+
+  // 雨（エリア平均 mm/h）の棒
+  for (let i = 0; i < forecastFrames.length; i++){
+    const f = forecastFrames[i];
+    const h = f.mean / rainMax * plotH;
+    g.fillStyle = 'rgba(33,140,255,.55)';
+    g.fillRect(padL + i*bw + 1, padT + plotH - h, bw - 2, h);
+    if (i % 2 === 0 || forecastFrames.length <= 8){
+      g.fillStyle = '#5b6b7a';
+      g.textAlign = 'center';
+      g.fillText(fmtClock(f.at), padL + i*bw + bw/2, padT + plotH + 5);
+    }
+  }
+  g.fillStyle = '#5b6b7a';
+  g.textAlign = 'left';
+  g.fillText(rainMax.toFixed(0) + ' mm/h', 2, padT);
+
+  // 地点の浸水深の折れ線（計算済みのときだけ）
+  const p = activePlace();
+  if (leadTimes && p && leadTimes.placeId === p.id){
+    const dMax = Math.max(0.1, ...leadTimes.series.map(s => s.depth));
+    g.strokeStyle = '#c62828';
+    g.lineWidth = 2;
+    g.beginPath();
+    leadTimes.series.forEach((s, i) => {
+      const x = padL + i*bw + bw/2, y = padT + plotH - s.depth / dMax * plotH;
+      i ? g.lineTo(x, y) : g.moveTo(x, y);
+    });
+    g.stroke();
+    g.fillStyle = '#c62828';
+    g.textAlign = 'right';
+    g.fillText(fmtDepth(dMax), W - 2, padT);
+  }
+  g.strokeStyle = '#d7dee5';
+  g.lineWidth = 1;
+  g.beginPath();
+  g.moveTo(padL, padT + plotH); g.lineTo(W - padR, padT + plotH);
+  g.stroke();
+}
 
 /* ================= 操作値と表示位置の永続化 ================= */
 const SETTING_IDS = ['baseMap','rrim','rrimOp','radarShow','radarOp','terrainViz','vizGain',
