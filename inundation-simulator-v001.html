@@ -705,9 +705,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
   .sec{padding:12px 16px;border-bottom:1px solid var(--border)}
   .sec h2{font-size:12px;margin:0 0 8px;color:var(--muted);letter-spacing:.05em}
   .row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
-  .row label{font-size:12px;flex:1}
-  .row output{font-size:12px;font-weight:600;min-width:78px;text-align:right}
-  input[type=range]{flex:2;accent-color:var(--accent)}
+  /* ラベルに最低幅を与えないと、320pxのパネルでは「不透明度」の4文字でも2行に折り返す */
+  .row label{font-size:12px;flex:1 1 auto;min-width:92px}
+  .row output{font-size:12px;font-weight:600;min-width:62px;text-align:right}
+  input[type=range]{flex:1 1 80px;min-width:0;accent-color:var(--accent)}
   button{font:inherit;font-size:13px;padding:8px 10px;border-radius:6px;border:1px solid var(--border);
     background:#f4f7fa;cursor:pointer}
   button:hover{background:#e8eef4}
@@ -723,8 +724,54 @@ svg.leaflet-image-layer.leaflet-interactive path {
   .check{display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:6px}
   #stats{font-size:12px;line-height:1.7}
   #stats b{font-variant-numeric:tabular-nums}
-  #status{font-size:12px;color:var(--muted);min-height:18px}
+  #status{font-size:12px;color:var(--muted);line-height:1.45}
+  #status:empty{display:none}
   #status.err{color:var(--danger)}
+
+  /* ===== タブ ===== */
+  #tabs{display:flex;gap:0;border-bottom:1px solid var(--border);
+    position:sticky;top:0;z-index:6;background:var(--panel-bg)}
+  .tab{flex:1;border:0;border-radius:0;background:none;font-size:13px;padding:10px 4px;
+    color:var(--muted);border-bottom:2px solid transparent}
+  .tab:hover{background:#f1f5f9}
+  .tab.sel{color:var(--accent);font-weight:700;border-bottom-color:var(--accent)}
+  .pane{display:none}
+  .pane.on{display:block}
+
+  /* ===== めったに触らない設定の折りたたみ ===== */
+  .adv{margin:8px 0 0;border-top:1px dashed var(--border);padding-top:7px}
+  .adv > summary{font-size:11px;color:var(--muted);cursor:pointer;list-style:none;
+    padding:3px 0;-webkit-user-select:none;user-select:none}
+  .adv > summary::-webkit-details-marker{display:none}
+  .adv > summary::before{content:"▸ ";font-size:10px}
+  .adv[open] > summary::before{content:"▾ "}
+  .adv[open] > summary{margin-bottom:6px}
+
+  /* ===== 常時見える実行バー =====
+     どのタブを見ていても押せるよう、パネル下端に貼り付ける。 */
+  #actionBar{position:sticky;bottom:0;z-index:7;flex:none;
+    padding:9px 16px calc(9px + env(safe-area-inset-bottom));
+    background:var(--panel-bg);border-top:1px solid var(--border);
+    box-shadow:0 -2px 10px rgba(0,0,0,.07)}
+  #actionSummary{font-size:12px;line-height:1.45;margin-bottom:5px}
+  #actionSummary:empty{display:none}
+  #actionSummary .as-name{font-weight:700}
+  #actionSummary .as-depth{font-variant-numeric:tabular-nums;font-weight:700}
+  #actionSummary.lv-caution .as-depth{color:#a67c00}
+  #actionSummary.lv-warn    .as-depth{color:#c25b00}
+  #actionSummary.lv-danger  .as-depth{color:var(--danger)}
+  #actionBar .btnrow{margin-top:6px}
+
+  /* ===== セクションの折りたたみ（画面幅を問わず有効にする） =====
+     以前はスマホ幅のメディアクエリの中にしか無く、広い画面では見出しを押しても
+     クラスが付くだけで何も畳めなかった。 */
+  .sec h2{display:flex;align-items:center;justify-content:space-between;gap:8px;
+    cursor:pointer;-webkit-user-select:none;user-select:none}
+  .sec h2::after{content:"▾";font-size:11px}
+  .sec.collapsed h2{margin:0}
+  .sec.collapsed h2::after{content:"▸"}
+  .sec.collapsed > *:not(h2){display:none}
+  .sec.collapsed{padding-top:6px;padding-bottom:6px}
 
   /* ===== マイ地点 ===== */
   input[type=text],input[type=number]{font:inherit;font-size:12px;padding:5px 6px;min-width:0;
@@ -860,14 +907,12 @@ svg.leaflet-image-layer.leaflet-interactive path {
     #app.panel-collapsed #panel{height:calc(48px + env(safe-area-inset-bottom));
       padding-bottom:env(safe-area-inset-bottom);overflow:hidden}
     #app.panel-collapsed #panelBody{display:none}
-    /* セクション単位の開閉。見出しをタップすると中身だけを畳み、縦スクロール量を減らせる。 */
-    .sec h2{display:flex;align-items:center;justify-content:space-between;gap:8px;
-      min-height:40px;margin:0 0 7px;cursor:pointer;-webkit-user-select:none;user-select:none}
-    .sec h2::after{content:"▾";font-size:11px}
-    .sec.collapsed h2{margin:0}
-    .sec.collapsed h2::after{content:"▸"}
-    .sec.collapsed > *:not(h2){display:none}
-    .sec.collapsed{padding-top:4px;padding-bottom:4px}
+    /* 畳んだ48pxの中で実行バーが貼り付き、つまみに重なるのを防ぐ */
+    #app.panel-collapsed #actionBar{display:none}
+    /* 開閉の指定自体はメディアクエリの外に出した。ここでは指で押せる高さだけ足す。 */
+    .sec h2{min-height:40px;margin:0 0 7px}
+    .tab{min-height:44px;font-size:13px}
+    .adv > summary{min-height:34px;display:flex;align-items:center}
     input[type=range]{min-height:34px}
     /* 凡例と地図クレジットは、重なったパネルの分だけ内側へ寄せる(実寸はJSが変数で配る) */
     #legend{left:6px;bottom:calc(var(--panel-vis-y, 0px) + 6px);max-width:calc(100% - 12px);
@@ -974,6 +1019,16 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <p>地形データ: 国土地理院 標高タイル（5m DEM優先）</p>
     </header>
 
+    <!-- 毎回見るもの(そなえ)・計算の入力(条件)・見た目(表示)を分ける。
+         同じタブの中身がHTML上で離れていても、data-pane が同じものをまとめて出し入れする。 -->
+    <div id="tabs" role="tablist">
+      <button class="tab sel" data-pane="prep" role="tab" aria-selected="true">そなえ</button>
+      <button class="tab" data-pane="cond" role="tab" aria-selected="false">条件</button>
+      <button class="tab" data-pane="view" role="tab" aria-selected="false">表示</button>
+    </div>
+
+    <div class="pane on" data-pane="prep">
+
     <div class="sec" id="secPlaces">
       <h2>マイ地点</h2>
       <div id="placeVerdict"></div>
@@ -1007,18 +1062,24 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <div class="check"><input type="checkbox" id="hzHightide"><label for="hzHightide">高潮浸水想定区域（想定最大規模）</label></div>
       <div class="check"><input type="checkbox" id="hzKaoku"><label for="hzKaoku">家屋倒壊等氾濫想定区域（河岸侵食）</label></div>
       <div class="check"><input type="checkbox" id="hzKeizoku"><label for="hzKeizoku">浸水継続時間</label></div>
-      <div class="row">
-        <label for="hzOp">不透明度</label>
-        <input type="range" id="hzOp" min="10" max="100" step="5" value="60">
-        <output id="hzOpOut">60%</output>
-      </div>
+      <details class="adv">
+        <summary>重ねたときの濃さ</summary>
+        <div class="row">
+          <label for="hzOp">想定区域の濃さ</label>
+          <input type="range" id="hzOp" min="10" max="100" step="5" value="60">
+          <output id="hzOpOut">60%</output>
+        </div>
+      </details>
       <p class="hint">出典: <a href="https://disaportal.gsi.go.jp/" target="_blank" rel="noopener">国土地理院「重ねるハザードマップ」</a>。
         浸水深の区分は色分けの凡例で読んでください（このツールは区域の内外だけを判定しています）。
         シミュレーション結果は想定区域の上に重なるので、下の色を見るときは「水をクリア」を押してください。</p>
     </div>
 
+    </div><!-- /pane prep -->
+
+    <div class="pane" data-pane="view">
     <div class="sec">
-      <h2>1. 対象エリア</h2>
+      <h2>地図と表示</h2>
       <p class="hint">地図を動かして対象地域を表示する（ズーム13以上）と、表示範囲の標高データを自動で取得します。計算中に地図を動かした場合も、移動先のエリアを取得し直します。</p>
       <div class="row" style="margin-top:8px">
         <label for="baseMap">背景地図</label>
@@ -1032,19 +1093,9 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <input type="checkbox" id="rrim">
         <label for="rrim">赤色立体地図を重ねる（地形の起伏を表示）</label>
       </div>
-      <div class="row">
-        <label for="rrimOp">不透明度</label>
-        <input type="range" id="rrimOp" min="10" max="100" step="5" value="60">
-        <output id="rrimOpOut">60%</output>
-      </div>
       <div class="check" style="margin-top:8px">
         <input type="checkbox" id="radarShow">
         <label for="radarShow">雨雲レーダーを重ねる（気象庁）</label>
-      </div>
-      <div class="row">
-        <label for="radarOp">不透明度</label>
-        <input type="range" id="radarOp" min="10" max="100" step="5" value="65">
-        <output id="radarOpOut">65%</output>
       </div>
       <div class="row" style="margin-top:8px">
         <label for="terrainViz">微地形の可視化</label>
@@ -1054,17 +1105,32 @@ svg.leaflet-image-layer.leaflet-interactive path {
           <option value="sink">窪地深さマップ</option>
         </select>
       </div>
-      <div class="row">
-        <label for="vizGain">強調度</label>
-        <input type="range" id="vizGain" min="1" max="20" step="1" value="5">
-        <output id="vizGainOut">×5</output>
-      </div>
       <p class="hint">地形取得前でも選択できます（未取得の場合は表示範囲の地形を自動取得します）。強調図: 周囲より高い所は明るく・低い所は暗く（くぼ地は青み）、斜面は赤く表示。窪地マップ: 水が抜けない窪地だけを深さで着色（黄→橙→赤→紫）。</p>
       <div class="check" style="margin-top:8px">
         <input type="checkbox" id="showFlowDir">
         <label for="showFlowDir">水の流れる向きを表示（土のうを置く面の判断用）</label>
       </div>
       <p class="hint">地形から水が流れ下る向きを矢印で描きます。矢印が濃いほど、そこへ多くの水が集まります。選択中の地点には、水が入ってくる向きを指す大きな矢印を出します。</p>
+
+      <details class="adv">
+        <summary>重ねる地図の濃さ・強調度</summary>
+        <div class="row">
+          <label for="rrimOp">赤色立体地図の濃さ</label>
+          <input type="range" id="rrimOp" min="10" max="100" step="5" value="60">
+          <output id="rrimOpOut">60%</output>
+        </div>
+        <div class="row">
+          <label for="radarOp">雨雲レーダーの濃さ</label>
+          <input type="range" id="radarOp" min="10" max="100" step="5" value="65">
+          <output id="radarOpOut">65%</output>
+        </div>
+        <div class="row">
+          <label for="vizGain">微地形の強調度</label>
+          <input type="range" id="vizGain" min="1" max="20" step="1" value="5">
+          <output id="vizGainOut">×5</output>
+        </div>
+      </details>
+
       <div class="btnrow" style="margin-top:8px">
         <button id="btn3d" disabled>3D表示</button>
       </div>
@@ -1093,11 +1159,13 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <p class="hint" id="texInfo" style="margin:0 0 6px"></p>
         <p class="hint">ドラッグで回転、右ドラッグで移動、ホイールでズーム。シミュレーション実行中は水面がリアルタイムに動きます。</p>
       </div>
-      <div id="status"></div>
     </div>
 
+    </div><!-- /pane view -->
+
+    <div class="pane" data-pane="cond">
     <div class="sec">
-      <h2>2. 降雨条件</h2>
+      <h2>降雨条件</h2>
       <div class="modes">
         <button id="rainManual" class="sel">手動設定</button>
         <button id="rainRadarBtn">レーダー実況</button>
@@ -1137,6 +1205,8 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <canvas id="fcstChart" width="560" height="150" style="display:none"></canvas>
         <p class="hint" id="fcstInfo">地形を取得してから「予報を取得」を押すと、気象庁の降水短時間予報（最大15時間先）を対象エリアぶん読み込みます。「予測を実行」すると、この予報どおりに降ったときの浸水深と、選択中の地点が各段階に達する時刻を計算します。</p>
       </div>
+      <details class="adv">
+      <summary>下水道・地表・境界の設定</summary>
       <div class="row" style="margin-top:12px">
         <label for="sewerPreset">下水道整備水準</label>
         <select id="sewerPreset" style="flex:2;font:inherit;font-size:12px;padding:4px">
@@ -1187,18 +1257,14 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <input type="checkbox" id="edgeDrain" checked>
         <label for="edgeDrain">エリア外縁から排水する（開放境界）</label>
       </div>
+      </details>
     </div>
 
     <div class="sec">
-      <h2>3. 計算方式</h2>
+      <h2>計算方式</h2>
       <div class="modes">
         <button id="modeQuick" class="sel">簡易水位法（即時）</button>
         <button id="modeSim">水流シミュレーション</button>
-      </div>
-      <div class="btnrow">
-        <button id="btnRun" class="primary" disabled>予測を実行</button>
-        <button id="btnPause" disabled>一時停止</button>
-        <button id="btnClear" disabled>水をクリア</button>
       </div>
       <div class="row" style="margin-top:10px">
         <label for="simSpeed">再生速度</label>
@@ -1209,6 +1275,9 @@ svg.leaflet-image-layer.leaflet-interactive path {
       水流シミュレーション: 雨が降り、水が低地へ流れて溜まる過程をアニメーション表示します。</p>
     </div>
 
+    </div><!-- /pane cond -->
+
+    <div class="pane on" data-pane="prep">
     <div class="sec">
       <h2>結果</h2>
       <div id="stats">
@@ -1217,14 +1286,18 @@ svg.leaflet-image-layer.leaflet-interactive path {
         浸水面積 (10cm以上): <b id="stArea">—</b><br>
         解像度: <b id="stRes">—</b>
       </div>
-      <div id="waterBalance" class="hint" style="margin-top:10px;line-height:1.65">
-        <b>直近10秒の水収支</b><br>
-        雨 <b id="wbRain">—</b> − 浸透 <b id="wbInfiltration">—</b><br>
-        − 下水 <b id="wbSewer">—</b> − 境界流出 <b id="wbEdge">—</b><br>
-        地表残水 <b id="wbAfter">—</b> ／ 誤差 <b id="wbError">—</b>
-      </div>
+      <details class="adv">
+        <summary>水収支（計算が水量を保存しているかの確認）</summary>
+        <div id="waterBalance" class="hint" style="line-height:1.65">
+          雨 <b id="wbRain">—</b> − 浸透 <b id="wbInfiltration">—</b><br>
+          − 下水 <b id="wbSewer">—</b> − 境界流出 <b id="wbEdge">—</b><br>
+          地表残水 <b id="wbAfter">—</b> ／ 誤差 <b id="wbError">—</b>
+        </div>
+      </details>
       <p class="hint">地図上をクリックすると、その地点の標高と浸水深を表示します。</p>
-      <div class="btnrow" style="margin-top:10px">
+      <details class="adv">
+      <summary>家族に渡す・持ち出す</summary>
+      <div class="btnrow">
         <button id="btnShareUrl">リンクをコピー</button>
         <button id="btnShareText">文字をコピー</button>
       </div>
@@ -1235,11 +1308,25 @@ svg.leaflet-image-layer.leaflet-interactive path {
         まとめ画像は、電波が切れても見られるように保存しておく用です。
         <b>リンクには登録した地点の座標（自宅の位置）が含まれます。</b>送る相手にご注意ください。</p>
       <div id="shareOut"></div>
+      </details>
     </div>
 
     <div class="sec" style="border-bottom:none">
       <p class="hint">※ 本アプリは地形（標高）に基づき、内水氾濫（降った雨が窪地に溜まる現象）の傾向のみを簡易計算するものです。河川の氾濫（外水氾濫）・高潮・津波は計算対象外で、下水道は全域一律の簡易モデル、実際の管網配置・ポンプ場・建物も考慮していません。実際の防災判断には自治体のハザードマップを利用してください。<br>※ 本ツールは無保証で提供され、結果に基づく判断で生じた損害について作者は責任を負いません。</p>
     </div>
+    </div><!-- /pane prep -->
+    </div>
+
+    <!-- 実行ボタンと状態表示は、どのタブを見ていても手が届くようパネル下端に貼り付ける。
+         以前は「計算方式」の中にあり、判定カードから1800px以上離れていた。 -->
+    <div id="actionBar">
+      <div id="actionSummary"></div>
+      <div id="status"></div>
+      <div class="btnrow">
+        <button id="btnRun" class="primary" disabled>予測を実行</button>
+        <button id="btnPause" disabled>一時停止</button>
+        <button id="btnClear" disabled>水をクリア</button>
+      </div>
     </div>
   </div>
 </div>
@@ -4621,6 +4708,7 @@ function actionsFor(groundDepth, floorDepth, inflowName){
 
 /* 選択中の地点について、深さと「今からやること」を表示する。 */
 function updatePlaceVerdict(){
+  updateActionSummary();
   const box = $('placeVerdict');
   const p = activePlace();
   if (!p){ box.textContent = ''; return; }
@@ -5411,7 +5499,7 @@ function buildShareUrl(){
     values[id] = el.type === 'checkbox' ? el.checked : el.value;
   }
   const c = map.getCenter();
-  const payload = {v: 1, places, active: activePlaceId, values, mode, rainMode,
+  const payload = {v: 1, places, active: activePlaceId, values, mode, rainMode, tab: activeTab,
                    view: {lat: +c.lat.toFixed(6), lng: +c.lng.toFixed(6), zoom: map.getZoom()}};
   return location.origin + location.pathname + '#s=' + encodeURIComponent(JSON.stringify(payload));
 }
@@ -5435,7 +5523,7 @@ function applyShareUrl(){
     savePlaces();
   }
   // 受け取った設定は、通常の復元と同じ経路を通すために保存してから読み戻す
-  lsSet(LS_SETTINGS, {values: payload.values, mode: payload.mode,
+  lsSet(LS_SETTINGS, {values: payload.values, mode: payload.mode, tab: payload.tab,
                       rainMode: payload.rainMode, view: payload.view});
   history.replaceState(null, '', location.pathname);   // 再読み込みで二重に適用しない
   return true;
@@ -5610,6 +5698,50 @@ $('btnShareImage').addEventListener('click', () => {
   setStatus('まとめ画像を作成しました。');
 });
 
+/* ================= タブと実行バー =================
+   46個の操作部品が1本の列に並び、主ボタンが判定カードから1800px以上離れていた。
+   毎回見るもの(そなえ)・計算の入力(条件)・見た目(表示)に分け、実行と状態だけを
+   どのタブからも届く位置に固定する。 */
+let activeTab = 'prep';
+
+function setTab(name){
+  if (!['prep', 'cond', 'view'].includes(name)) name = 'prep';
+  activeTab = name;
+  for (const b of document.querySelectorAll('#tabs .tab')){
+    const on = b.dataset.pane === name;
+    b.classList.toggle('sel', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  }
+  // 同じタブの中身がHTML上で複数に分かれているので、data-pane が一致するもの全部を出す
+  for (const p of document.querySelectorAll('#panelBody .pane'))
+    p.classList.toggle('on', p.dataset.pane === name);
+  $('panel').scrollTop = 0;
+  saveSettingsSoon();
+}
+for (const b of document.querySelectorAll('#tabs .tab'))
+  b.addEventListener('click', () => setTab(b.dataset.pane));
+
+/* 実行バーに出す1行。タブを移っても、いま何が起きるかが見えるようにする。 */
+function updateActionSummary(){
+  const box = $('actionSummary');
+  const p = activePlace();
+  box.className = '';
+  if (!p){ box.innerHTML = '<span class="hint">地点を登録すると、ここに判定が出ます</span>'; return; }
+  const i = grid ? cellIndexAt(p.lat, p.lng) : -1;
+  if (i < 0){
+    box.innerHTML = '<span class="as-name">' + escapeHtml(p.name) + '</span>' +
+      ' <span class="hint">— 地形の取得エリア外</span>';
+    return;
+  }
+  const depth = grid.water[i];
+  const floor = floorState(depth, p.floorCm);
+  box.className = 'lv-' + floor.key;
+  box.innerHTML = '<span class="as-name">' + escapeHtml(p.name) + '</span> ' +
+    (depth >= 0.01
+      ? '<span class="as-depth">' + fmtDepth(depth) + '</span> ' + escapeHtml(floor.label)
+      : '<span class="hint">内水の浸水は予測されていません</span>');
+}
+
 /* ================= 操作値と表示位置の永続化 ================= */
 const SETTING_IDS = ['baseMap','rrim','rrimOp','radarShow','radarOp','terrainViz','vizGain',
   'tex3d','texRes','exag3d','rainRate','rainDur','sewerPreset','sewerRate','sewerStore',
@@ -5628,7 +5760,8 @@ function saveSettings(){
     values[id] = el.type === 'checkbox' ? el.checked : el.value;
   }
   const c = map.getCenter();
-  lsSet(LS_SETTINGS, {values, mode, rainMode, view: {lat: c.lat, lng: c.lng, zoom: map.getZoom()}});
+  lsSet(LS_SETTINGS, {values, mode, rainMode, tab: activeTab,
+                      view: {lat: c.lat, lng: c.lng, zoom: map.getZoom()}});
 }
 function saveSettingsSoon(){
   clearTimeout(settingsTimer);
@@ -5657,6 +5790,7 @@ function restoreSettings(){
   rrimLayer.setOpacity(+$('rrimOp').value / 100);
   for (const spec of HAZARD_LAYERS) if ($(spec.id).checked) updateHazardLayer(spec);
   drawFlowArrows();
+  if (saved.tab) setTab(saved.tab);
   if (saved.mode === 'sim' || saved.mode === 'quick') setMode(saved.mode);
   if (saved.rainMode === 'radar' || saved.rainMode === 'manual') setRainMode(saved.rainMode);
   // 背景地図・赤色立体地図・レーダーはレイヤー操作が要るので、既存のハンドラに任せる
