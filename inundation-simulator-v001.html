@@ -688,6 +688,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
   #overlay{position:absolute;left:0;top:0;transform-origin:0 0;pointer-events:none;display:none;
     image-rendering:pixelated;image-rendering:crisp-edges}
   #overlay.active{display:block}
+  /* 流向の矢印は画面座標で描く。グリッド解像度のオーバーレイに描くとセル1px相当になり
+     矢印の形が潰れるため、地図の表示ピクセルに合わせた別キャンバスに乗せている。 */
+  #flowArrows{position:absolute;inset:0;pointer-events:none;display:none;z-index:450}
+  #flowArrows.active{display:block}
 
   #panel{width:320px;flex:none;background:var(--panel-bg);border-left:1px solid var(--border);
     display:flex;flex-direction:column;overflow-y:auto}
@@ -742,6 +746,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
   .vacts-h{margin-top:8px;font-weight:700;font-size:12px}
   .vacts{margin:3px 0 0;padding-left:1.35em;font-size:12px;line-height:1.55}
   .vacts li{margin-bottom:3px}
+  .vflow{margin-top:2px}
   .vacts.lt{list-style:none;padding-left:0;font-variant-numeric:tabular-nums}
   .vacts.lt .vmeta{margin-left:4px}
   .vacts.lt .lt-none{color:var(--muted)}
@@ -866,6 +871,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
   <div id="mapwrap">
     <div id="map"></div>
     <canvas id="overlay"></canvas>
+    <canvas id="flowArrows"></canvas>
     <div id="view3d" style="position:absolute;inset:0;z-index:700;display:none;background:#cfe0ee"></div>
     <div id="legend">
       <button id="legendToggle" type="button" aria-expanded="true" aria-controls="legendBody">凡例</button>
@@ -991,6 +997,11 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <output id="vizGainOut">×5</output>
       </div>
       <p class="hint">地形取得前でも選択できます（未取得の場合は表示範囲の地形を自動取得します）。強調図: 周囲より高い所は明るく・低い所は暗く（くぼ地は青み）、斜面は赤く表示。窪地マップ: 水が抜けない窪地だけを深さで着色（黄→橙→赤→紫）。</p>
+      <div class="check" style="margin-top:8px">
+        <input type="checkbox" id="showFlowDir">
+        <label for="showFlowDir">水の流れる向きを表示（土のうを置く面の判断用）</label>
+      </div>
+      <p class="hint">地形から水が流れ下る向きを矢印で描きます。矢印が濃いほど、そこへ多くの水が集まります。選択中の地点には、水が入ってくる向きを指す大きな矢印を出します。</p>
       <div class="btnrow" style="margin-top:8px">
         <button id="btn3d" disabled>3D表示</button>
       </div>
@@ -2510,6 +2521,7 @@ function rebuildFlowElevation(){
   const radius = +$('flowSmooth').value;
   grid.flowElev = radius > 0 ? boxBlur(grid.elev, grid.cols, grid.rows, radius)
     : Float32Array.from(grid.elev);
+  grid.routing = null;   // 流下地形が変わったら流向・集水面積は作り直す
 }
 $('flowSmooth').addEventListener('change', () => {
   if (!grid) return;
@@ -3160,6 +3172,7 @@ async function captureTerrain(){
     : '5mDEM';
   setStatus(`地形取得完了(${srcInfo})。標高 ${emin.toFixed(1)}〜${emax.toFixed(1)} m`);
   computeViz();   // 微地形レイヤーを再生成(内部でrenderWaterも呼ぶ)
+  drawFlowArrows();
   updateStats();
   capturing = false;
 }
@@ -4242,6 +4255,7 @@ function refreshPlaces(){
   syncPlaceMarkers();
   updatePlaceVerdict();
   updateHazardVerdict();   // 外水の想定区域は地点が変わったときだけ引き直す(通信を伴うため)
+  drawFlowArrows();
 }
 
 function renderPlaceList(){
@@ -4395,8 +4409,9 @@ function floorState(groundDepth, floorCm){
   return {key:'danger', label:'1階のほぼ全体が水没するおそれ', floorDepth};
 }
 
-/* 前日〜数時間前に、この地点で実際に手を動かす順に並べた手順。 */
-function actionsFor(groundDepth, floorDepth){
+/* 前日〜数時間前に、この地点で実際に手を動かす順に並べた手順。
+   inflowName（水が入ってくる方位）が分かるときは、土のうを置く面を名指しする。 */
+function actionsFor(groundDepth, floorDepth, inflowName){
   if (groundDepth < 0.01) return [];
   const a = [];
   if (floorDepth >= 1.0)
@@ -4409,7 +4424,9 @@ function actionsFor(groundDepth, floorDepth){
     a.push('車を高い場所へ移す。動かすなら今（30 cmでドアが開かず、走行も危険になります）');
   else if (groundDepth >= 0.10)
     a.push('車を高い場所へ移すか、動かさないと決めるかを、今のうちに判断する');
-  a.push('止水板・土のう・水を入れたゴミ袋を、玄関と地面に近い開口部に置く');
+  a.push(inflowName
+    ? `止水板・土のう・水を入れたゴミ袋を、水が入ってくる${inflowName}側の開口部と玄関に置く`
+    : '止水板・土のう・水を入れたゴミ袋を、玄関と地面に近い開口部に置く');
   a.push('停電に備える（モバイルバッテリー・明かり・浴槽に水を張る）');
   a.push('避難先と経路を今のうちに決める。夜間や冠水後の移動は避ける');
   return a;
@@ -4454,12 +4471,18 @@ function updatePlaceVerdict(){
   const floorTxt = floor.floorDepth > 0
     ? '床面から <b>+' + fmtDepth(floor.floorDepth) + '</b>'
     : '床面まで あと <b>' + fmtDepth(-floor.floorDepth) + '</b>';
-  const acts = actionsFor(depth, floor.floorDepth)
+  const flow = inflowAt(i);
+  const inflowName = flow && flow.name;
+  const flowTxt = inflowName
+    ? '<div class="vflow">水は主に <b>' + inflowName + '</b> 側から入ってきます' +
+      '<span class="vmeta">（上流 約' + flow.upstreamCells + 'セル）</span></div>'
+    : '';
+  const acts = actionsFor(depth, floor.floorDepth, inflowName)
     .map(t => '<li>' + escapeHtml(t) + '</li>').join('');
 
   box.innerHTML = '<div class="verdict lv-' + key + '">' + head +
     '<div class="vtitle">' + escapeHtml(floor.label) + '</div>' +
-    '<div class="vdepth">予測浸水深 <b>' + fmtDepth(depth) + '</b>（' + floorTxt + '）</div>' +
+    '<div class="vdepth">予測浸水深 <b>' + fmtDepth(depth) + '</b>（' + floorTxt + '）</div>' + flowTxt +
     (ground.note ? '<p class="vnote">' + escapeHtml(ground.label) + '。' + escapeHtml(ground.note) + '</p>' : '') +
     leadTimeHtml() +
     '<div class="vacts-h">今からやること</div><ol class="vacts">' + acts + '</ol>' +
@@ -4883,11 +4906,172 @@ function drawForecastChart(){
   g.stroke();
 }
 
+
+/* ================= 水の流入方向 =================
+   流下計算はすでに地形を持っているのに、水がどちらから来るかを見せていなかった。
+   これは「止水板・土のうをどの面に置くか」に直結し、公式のハザードマップにも無い情報。
+
+   向きは水量ではなく地形から決める（D8=最急降下の流向と、その集水面積）。
+   実際の流量を使うと降雨条件を変えるたびに向きが揺れてしまうが、土のうを置く面は
+   雨の降り方では変わらないため、地形由来のほうが備えの判断に合う。 */
+
+// 8近傍。dc, dr と、そのぶんの距離倍率。
+const D8 = [[ 1, 0, 1], [ 1, 1, Math.SQRT2], [ 0, 1, 1], [-1, 1, Math.SQRT2],
+            [-1, 0, 1], [-1,-1, Math.SQRT2], [ 0,-1, 1], [ 1,-1, Math.SQRT2]];
+const COMPASS = ['北','北東','東','南東','南','南西','西','北西'];
+
+/* 方位ベクトル(東+, 北+)を8方位の名前にする */
+function compassName(east, north){
+  if (!east && !north) return null;
+  const deg = (Math.atan2(east, north) * 180 / Math.PI + 360) % 360;
+  return COMPASS[Math.round(deg / 45) % 8];
+}
+
+/* 最急降下の流向 down[] と、集水面積 acc[]（セル数）を作る。地形1つにつき1回だけ。 */
+function computeRouting(){
+  if (!grid) return null;
+  if (grid.routing) return grid.routing;
+  const {cols, rows, cellM} = grid;
+  const elev = grid.flowElev || grid.elev;
+  const n = cols * rows;
+  const down = new Int32Array(n).fill(-1);
+
+  for (let r = 0; r < rows; r++){
+    for (let c = 0; c < cols; c++){
+      const i = r*cols + c;
+      let best = -1, bestSlope = 0;
+      for (const [dc, dr, dist] of D8){
+        const nc = c + dc, nr = r + dr;
+        if (nc < 0 || nr < 0 || nc >= cols || nr >= rows) continue;
+        const j = nr*cols + nc;
+        const slope = (elev[i] - elev[j]) / (dist * cellM);
+        if (slope > bestSlope){ bestSlope = slope; best = j; }
+      }
+      down[i] = best;                     // -1 = 窪地の底(これ以上下れない)
+    }
+  }
+
+  // 高い順に流していけば、下流に着くころには上流ぶんが足し終わっている
+  const order = new Int32Array(n);
+  for (let i = 0; i < n; i++) order[i] = i;
+  const arr = Array.from(order).sort((a, b) => elev[b] - elev[a]);
+  const acc = new Float64Array(n).fill(1);
+  for (const i of arr){ const d = down[i]; if (d >= 0) acc[d] += acc[i]; }
+
+  grid.routing = {down, acc};
+  return grid.routing;
+}
+
+/* その地点へ水が入ってくる向き。上流側の隣接セルを集水面積で重みづけして合成する。 */
+function inflowAt(i){
+  const routing = computeRouting();
+  if (!routing) return null;
+  const {cols, rows} = grid;
+  const {down, acc} = routing;
+  const r = (i / cols) | 0, c = i - r*cols;
+  let east = 0, north = 0, inflow = 0;
+  for (const [dc, dr] of D8){
+    const nc = c + dc, nr = r + dr;
+    if (nc < 0 || nr < 0 || nc >= cols || nr >= rows) continue;
+    const j = nr*cols + nc;
+    if (down[j] !== i) continue;          // このセルへ流れ込む隣だけ数える
+    const w = acc[j];
+    inflow += w;
+    east  += dc * w;                      // 列が増える向き = 東
+    north -= dr * w;                      // 行が増える向き = 南なので符号を反転
+  }
+  if (!inflow) return {name: null, inflow: 0, upstreamCells: 0};
+  return {name: compassName(east, north), inflow, upstreamCells: Math.round(inflow),
+          east, north};
+}
+
+/* ================= 矢印の描画（画面座標） ================= */
+const flowCanvas = $('flowArrows');
+const fctx = flowCanvas.getContext('2d');
+
+function arrow(g, x, y, dx, dy, len, width, color){
+  const m = Math.hypot(dx, dy) || 1;
+  const ux = dx/m, uy = dy/m;
+  const hx = x + ux*len, hy = y + uy*len;      // 先端
+  const tx = x - ux*len, ty = y - uy*len;      // 根本
+  g.strokeStyle = color; g.fillStyle = color; g.lineWidth = width;
+  g.beginPath(); g.moveTo(tx, ty); g.lineTo(hx, hy); g.stroke();
+  const head = len * 0.7;
+  g.beginPath();
+  g.moveTo(hx, hy);
+  g.lineTo(hx - ux*head + uy*head*0.5, hy - uy*head - ux*head*0.5);
+  g.lineTo(hx - ux*head - uy*head*0.5, hy - uy*head + ux*head*0.5);
+  g.closePath(); g.fill();
+}
+
+function drawFlowArrows(){
+  const on = $('showFlowDir').checked && !!grid;
+  flowCanvas.classList.toggle('active', on);
+  if (!on) return;
+  const wrap = $('mapwrap');
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  if (flowCanvas.width !== Math.round(W*dpr) || flowCanvas.height !== Math.round(H*dpr)){
+    flowCanvas.width = Math.round(W*dpr); flowCanvas.height = Math.round(H*dpr);
+  }
+  fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  fctx.clearRect(0, 0, W, H);
+
+  const routing = computeRouting();
+  if (!routing) return;
+  const {cols} = grid;
+  const {down, acc} = routing;
+
+  // 画面上の格子点をなぞる。地図のピクセルに合わせるので、ズームしても矢印は潰れない。
+  const SP = 46;
+  let accMax = 1;
+  const samples = [];
+  for (let y = SP/2; y < H; y += SP){
+    for (let x = SP/2; x < W; x += SP){
+      const ll = map.containerPointToLatLng([x, y]);
+      const i = cellIndexAt(ll.lat, ll.lng);
+      if (i < 0) continue;
+      const d = down[i];
+      if (d < 0) continue;                       // 窪地の底には向きが無い
+      const r = (i/cols)|0, c = i - r*cols;
+      const dr2 = ((d/cols)|0) - r, dc2 = (d - ((d/cols)|0)*cols) - c;
+      if (acc[i] > accMax) accMax = acc[i];
+      samples.push({x, y, dc: dc2, dr: dr2, a: acc[i]});
+    }
+  }
+  for (const s of samples){
+    // 集水面積の対数で濃さを決める。谷筋が太く、尾根が薄く見える。
+    const t = Math.min(1, Math.log10(1 + s.a) / Math.log10(1 + accMax));
+    arrow(fctx, s.x, s.y, s.dc, s.dr, 7 + t*5, 1 + t*1.6,
+          `rgba(10,60,120,${(0.22 + t*0.58).toFixed(2)})`);
+  }
+
+  // 選択中の地点には、水が入ってくる向きを指す大きな矢印を出す
+  const p = activePlace();
+  if (!p) return;
+  const i = cellIndexAt(p.lat, p.lng);
+  if (i < 0) return;
+  const flow = inflowAt(i);
+  if (!flow || !flow.name) return;
+  const pt = map.latLngToContainerPoint([p.lat, p.lng]);
+  const m = Math.hypot(flow.east, flow.north) || 1;
+  // east/north は「水が来る側」の向き。画面では y が下向きなので north を反転する。
+  const ux = flow.east/m, uy = -flow.north/m;
+  // 水源側からピンへ向かう矢印にするため、始点を外側に取って内向きに描く
+  arrow(fctx, pt.x + ux*30, pt.y + uy*30, -ux, -uy, 15, 3.5, 'rgba(198,40,40,.92)');
+}
+
+$('showFlowDir').addEventListener('change', drawFlowArrows);
+map.on('move moveend zoomend resize viewreset', drawFlowArrows);
+// ズームアニメ中はタイルだけが拡大され、画面座標のこのキャンバスは追随できない。
+// そのまま残すと矢印が地形からずれて見えるので、アニメの間は消して zoomend で描き直す。
+map.on('zoomstart', () => fctx.clearRect(0, 0, flowCanvas.width, flowCanvas.height));
+
 /* ================= 操作値と表示位置の永続化 ================= */
 const SETTING_IDS = ['baseMap','rrim','rrimOp','radarShow','radarOp','terrainViz','vizGain',
   'tex3d','texRes','exag3d','rainRate','rainDur','sewerPreset','sewerRate','sewerStore',
   'surfacePreset','infilRate','flowSmooth','edgeDrain','simSpeed','placeFloor',
-  'hzFlood','hzHightide','hzKaoku','hzKeizoku','hzOp'];
+  'hzFlood','hzHightide','hzKaoku','hzKeizoku','hzOp','showFlowDir'];
 
 let settingsTimer = 0;
 function saveSettings(){
@@ -4926,6 +5110,7 @@ function restoreSettings(){
   $('hzOpOut').textContent     = $('hzOp').value + '%';
   rrimLayer.setOpacity(+$('rrimOp').value / 100);
   for (const spec of HAZARD_LAYERS) if ($(spec.id).checked) updateHazardLayer(spec);
+  drawFlowArrows();
   if (saved.mode === 'sim' || saved.mode === 'quick') setMode(saved.mode);
   if (saved.rainMode === 'radar' || saved.rainMode === 'manual') setRainMode(saved.rainMode);
   // 背景地図・赤色立体地図・レーダーはレイヤー操作が要るので、既存のハンドラに任せる
