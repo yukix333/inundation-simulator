@@ -862,6 +862,21 @@ svg.leaflet-image-layer.leaflet-interactive path {
   .lg{display:flex;align-items:center;gap:6px;margin:2px 0}
   .lg i{width:18px;height:12px;border-radius:2px;display:inline-block;border:1px solid rgba(0,0,0,.15)}
 
+  /* 雨雲レーダーと衛星雲画像の観測時刻。両方を出すことがあるので、右上に縦へ積む。
+     レーダーの点は3枚のうち何枚目を見せているかの目印で、文字は動かさない。 */
+  #mapStamps{position:absolute;right:10px;top:10px;z-index:800;display:flex;flex-direction:column;
+    align-items:flex-end;gap:6px;pointer-events:none}
+  #mapwrap.placing #mapStamps{display:none}  /* 地点追加中は上の案内バーに場所を譲る */
+  .map-stamp{display:flex;align-items:center;
+    gap:7px;background:rgba(20,30,40,.86);color:#fff;border-radius:8px;padding:6px 10px;
+    font-size:12px;line-height:1.25;white-space:nowrap;pointer-events:none;
+    box-shadow:0 2px 8px rgba(0,0,0,.25)}
+  .map-stamp[hidden]{display:none}           /* display:flex が hidden を打ち消すため */
+  .stamp-age{opacity:.82;font-size:11px}
+  .stamp-dots{display:flex;gap:4px}
+  .stamp-dots i{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.35)}
+  .stamp-dots i.on{background:#fff}
+
   #probe{position:absolute;z-index:900;background:rgba(20,30,40,.88);color:#fff;font-size:11px;
     padding:6px 8px;border-radius:6px;pointer-events:none;display:none;white-space:nowrap;line-height:1.5}
   #progress{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:950;
@@ -932,6 +947,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
     #legendBody{padding-top:2px}
     /* 畳んだときはつまみ以外が無いので、地図を塞ぐ面積が最小になる */
     .zoom-level-control{font-size:11px;padding:3px 6px}
+    /* 横向きでは操作パネルが右に来るので、その分だけ内側へ寄せる */
+    #mapStamps{right:calc(var(--panel-vis-x, 0px) + 6px);top:6px;gap:4px}
+    .map-stamp{gap:6px;padding:5px 8px;font-size:11px}
+    .stamp-age{font-size:10px}
     #progress{max-width:calc(100% - 28px);padding:12px 16px;text-align:center}
     .leaflet-top .leaflet-control{margin-top:6px}
     .leaflet-left .leaflet-control{margin-left:6px}
@@ -981,6 +1000,20 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <div class="lg"><i style="background:#FF2800"></i>50〜80</div>
         <div class="lg"><i style="background:#B40068"></i>80以上</div>
       </div>
+      </div>
+    </div>
+    <!-- 雨雲がいつの観測かは、凡例を開かないと分からないと困る(スマホでは既定で畳んである)。
+         地図の右上に常に出しておく。左上はズーム率、左下は凡例、上中央は地点追加の案内が使う。 -->
+    <div id="mapStamps">
+      <div id="radarStamp" class="map-stamp" hidden>
+        <b id="radarStampTime">—</b>
+        <span id="radarStampAge" class="stamp-age"></span>
+        <span id="radarStampDots" class="stamp-dots" aria-hidden="true"></span>
+      </div>
+      <!-- 雲画像は3時間ぶんを流すので、何枚目かの点ではなく「いつからいつまで」を出す -->
+      <div id="satStamp" class="map-stamp" hidden>
+        <b id="satStampTime">—</b>
+        <span id="satStampAge" class="stamp-age"></span>
       </div>
     </div>
     <div id="probe"></div>
@@ -1053,6 +1086,20 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <div id="evacResult"></div>
     </div>
 
+    <div class="sec" id="secRainMotion">
+      <h2>いまの雨雲の動き</h2>
+      <div class="btnrow">
+        <button id="btnRainMotion" class="primary">雨雲の動きを読む</button>
+      </div>
+      <div id="rainMotionResult"></div>
+      <p class="hint">気象庁の実況（5分刻みの3枚）のずれから、雨雲の進む向きと速さを求め、
+        <b>選択中のマイ地点にいつ雨が届くか</b>を見積もります。雨雲がいまの形・速さのまま
+        流れるという前提の見積もりなので、これから発達する雲や、新しく湧く雲は入っていません。
+        30分より先はとくに外れやすいので、目安として見てください。先の見通しは
+        「条件」タブのレーダー実況（気象庁の予報）で確かめられます。<br>
+        読み取ったあとは、新しい実況が届くたびに自動で計算し直します。</p>
+    </div>
+
     <div class="sec" id="secHazard">
       <h2>外水（河川・高潮）の想定区域</h2>
       <p class="hint">このシミュレーターが計算しているのは内水氾濫だけです。前日〜数時間前の備えでは
@@ -1095,8 +1142,31 @@ svg.leaflet-image-layer.leaflet-interactive path {
       </div>
       <div class="check" style="margin-top:8px">
         <input type="checkbox" id="radarShow">
-        <label for="radarShow">雨雲レーダーを重ねる（気象庁）</label>
+        <label for="radarShow">雨雲レーダーを重ねる（気象庁・直近15分の動きをくり返し表示）</label>
       </div>
+      <div class="check" style="margin-top:8px">
+        <input type="checkbox" id="satShow">
+        <label for="satShow">衛星の雲画像を重ねる（気象庁ひまわり・直近3時間の動きをくり返し表示）</label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label for="satArea">雲画像の範囲</label>
+        <select id="satArea" style="flex:2;font:inherit;font-size:12px;padding:4px">
+          <option value="jp" selected>日本周辺（細かい・3時間の動き）</option>
+          <option value="fd">ひまわり全球（半球ぜんぶ・6時間の動き）</option>
+          <option value="global">地球全体（静止衛星リング合成・最新の1枚）</option>
+        </select>
+      </div>
+      <div class="row" style="margin-top:8px" id="satBandRow">
+        <label for="satBand">雲画像の種類</label>
+        <select id="satBand" style="flex:2;font:inherit;font-size:12px;padding:4px">
+          <option value="B13/TBB" selected>赤外（昼夜とも見える）</option>
+          <option value="REP/ETC">真彩色（昼のみ）</option>
+          <option value="B03/ALBD">可視（昼のみ）</option>
+        </select>
+      </div>
+      <p class="hint" id="satMosaicNote" hidden><b>地球全体</b>は、世界に散らばる静止衛星（ひまわり・GOES・Meteosat ほか）の赤外画像を1枚に繋いだ合成（EUMETSAT「静止衛星リング」）です。ひまわりは東経140.7度に静止していて中心から約81度までしか見えないため、1機ではアメリカもヨーロッパも原理的に写りません。1つの製品なので継ぎ目で色が変わりません。種類は赤外10.8μm帯に固定されます。<b>更新は3時間ごと</b>で、動きの再生と自動更新はしません（チェックを入れ直すと取り直します）。いま近づいている雨を追うときは「日本周辺」か「ひまわり全球」を使ってください。</p>
+      <p class="hint">雲画像は広域でだけ表示します（日本周辺はズーム10以下、ひまわり全球は8以下、地球全体は6以下）。タイルがそこまでしか配信されておらず、街区まで寄ると引き伸ばされて雲の形が読めなくなるためです。まず広域で雨雲が近づいているかを見て、それから寄って浸水を確かめる使い方を想定しています。</p>
+      <p class="hint"><b>日本周辺</b>は東経90〜180度・赤道〜北緯66度の切り出しで、その外は何も出ません。かわりに細かく（ズーム6まで）速く（2.5分ごと）更新されます。<b>ひまわり全球</b>はひまわりが見ている半球ぜんぶ（およそ東経60度〜西経140度）が入るので、台風が生まれる熱帯や南半球まで追えます。観測していない範囲は地図がそのまま見えます。可視・真彩色は夜側に写るものが無いので、夜になっている範囲には何も出ません。時刻を問わず見るなら赤外を選んでください。</p>
       <div class="row" style="margin-top:8px">
         <label for="terrainViz">微地形の可視化</label>
         <select id="terrainViz" style="flex:2;font:inherit;font-size:12px;padding:4px">
@@ -1123,6 +1193,11 @@ svg.leaflet-image-layer.leaflet-interactive path {
           <label for="radarOp">雨雲レーダーの濃さ</label>
           <input type="range" id="radarOp" min="10" max="100" step="5" value="65">
           <output id="radarOpOut">65%</output>
+        </div>
+        <div class="row">
+          <label for="satOp">衛星雲画像の濃さ</label>
+          <input type="range" id="satOp" min="10" max="100" step="5" value="55">
+          <output id="satOpOut">55%</output>
         </div>
         <div class="row">
           <label for="vizGain">微地形の強調度</label>
@@ -2627,13 +2702,13 @@ $('baseMap').addEventListener('change', () => {
   map.removeLayer(currentBase);
   currentBase = next;
   if (rrimLayer._map) rrimLayer.bringToFront();   // 赤色立体地図は常に背景の上に保つ
-  if (radarLayer) radarLayer.bringToFront();      // 雨雲レーダーは常に最前面に保つ
+  bringWeatherLayersToFront();                            // 雨雲レーダーは常に最前面に保つ
 });
 
 $('rrim').addEventListener('change', () => {
   if ($('rrim').checked) rrimLayer.addTo(map);
   else rrimLayer.remove();
-  if (radarLayer) radarLayer.bringToFront();      // 赤色立体地図の追加後もレーダーを隠さない
+  bringWeatherLayersToFront();                            // 赤色立体地図の追加後もレーダーを隠さない
 });
 $('rrimOp').addEventListener('input', () => {
   $('rrimOpOut').textContent = $('rrimOp').value + '%';
@@ -3384,8 +3459,19 @@ function decodeRain(d, k){
 
 let radarFrames = null;   // [{validtime, forecast, rain:Float32Array(cols*rows), max, mean}]
 
-const fmtRadarTime = v =>
-  `${v.slice(8,10)}:${v.slice(10,12)}`;
+/* 気象庁の validtime は UTC。文字列をそのまま切ると9時間ずれるので、端末の時計に直す。 */
+const fmtRadarTime = v => {
+  const d = jmaTimeToDate(v);
+  return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+};
+
+/* 観測からどれだけ経ったか。数字が育っていくので、更新が止まればそれで分かる。 */
+function radarAgeText(v){
+  const mn = Math.floor((Date.now() - jmaTimeToDate(v)) / 60000);
+  if (mn < 1)  return 'たった今';
+  if (mn < 60) return `${mn}分前`;
+  return `${Math.floor(mn/60)}時間${mn%60}分前`;
+}
 
 async function loadRadar(){
   if (!grid) return;
@@ -3479,8 +3565,21 @@ function updateRadarInfo(){
 
 /* --- 雨雲レーダーの地図表示(地形取得やモードに依存せず単独で使える) --- */
 const NOWC_BASE = 'https://www.jma.go.jp/bosai/jmatile/data/nowc/';
-let radarLayer = null;
-let latestRadarTime = null;
+const RADAR_ANIM_FRAMES = 3;     // パラパラ表示に使う実況の枚数(5分刻みなので直近15分)
+const RADAR_ANIM_MS = 500;       // 1枚あたりの表示時間
+const RADAR_WATCH_MS = 20*1000;  // 「◯分前」を書き換える間隔
+const RADAR_POLL_MS  = 60*1000;  // 気象庁の実況は5分ごと。1分おきに新しい時刻が出ていないか見る
+
+let radarLayer  = null;   // いま見えている1枚(凡例の表示判定と最前面保持に使う)
+let radarLayers = [];     // 地図に載せているレーダー。パラパラ表示では3枚を重ねて持つ
+let radarTimes  = [];     // radarLayers に対応する時刻(古い順)
+let radarAnimAt = 0;      // いま何枚目を見せているか
+let radarAnimTimer = null;
+let radarWatchTimer = null;
+let radarReqId = 0;       // 時刻一覧の取得中に設定が変わったときの取り違え防止
+// 時刻ごとのレイヤーを取っておき、5分後の更新では増えた1枚だけを新しく読む
+let radarLayerByTime = new Map();
+let radarPolledAt = 0;
 
 // 気象庁の雨雲タイルは奇数ズームでは配信を省略する。
 // Leaflet がそのまま {z} を要求すると空になるため、偶数ズームの画像を補間して描画する。
@@ -3530,13 +3629,19 @@ const JmaRadarLayer = L.GridLayer.extend({
   }
 });
 
-// 最新の実況時刻を取得(先頭が最新)
-async function ensureLatestRadarTime(){
-  if (!latestRadarTime){
+// 直近の実況時刻を古い順に RADAR_ANIM_FRAMES 枚。
+// 実況は5分ごとに更新されるので、開きっぱなしでも古い雲を回し続けないよう5分で取り直す。
+let latestRadarTimes = null, latestRadarTimesAt = 0;
+async function ensureLatestRadarTimes(force){
+  if (force || !latestRadarTimes || Date.now() - latestRadarTimesAt > 5*60*1000){
     const j = await fetch(NOWC_BASE + 'targetTimes_N1.json').then(r => r.json());
-    latestRadarTime = {basetime: j[0].basetime, validtime: j[0].validtime, forecast: false};
+    latestRadarTimes = j
+      .map(t => ({basetime: t.basetime, validtime: t.validtime, forecast: false}))
+      .sort((a,b) => a.validtime.localeCompare(b.validtime))
+      .slice(-RADAR_ANIM_FRAMES);
+    latestRadarTimesAt = Date.now();
   }
-  return latestRadarTime;
+  return latestRadarTimes;
 }
 
 /* 凡例の開閉。地図が狭いスマホでは既定で畳んでおく。
@@ -3653,28 +3758,174 @@ function updateLegend(){
   $('legend').style.display = (showRain || showDepth) ? 'block' : 'none';
 }
 
+/* パラパラ表示は各コマとも地図に載せたまま、濃さの出し入れだけで切り替える。
+   毎回タイルを取り直さないので、2周目からは通信なしで滑らかに繰り返せる。 */
+
+/* 重ねものの上下関係。衛星の雲画像はハザードや赤色立体地図の上、雨雲レーダーの下に置く。
+   いま降っている雨をいちばん手前に残すため。 */
+function bringWeatherLayersToFront(){
+  for (const l of satLayers) l.bringToFront();
+  for (const l of radarLayers) l.bringToFront();
+}
+
+function clearRadarLayers(){
+  stopRadarAnim();
+  stopRadarWatchIfIdle();
+  for (const l of radarLayerByTime.values()) map.removeLayer(l);
+  radarLayerByTime.clear();
+  radarLayers = []; radarTimes = []; radarAnimAt = 0; radarLayer = null;
+  $('radarStamp').hidden = true;
+}
+
+/* 表示する時刻の並びを差し替える。すでに読んであるレイヤーは使い回すので、
+   5分ごとの更新で新しく取りにいくのは増えた1枚だけで済む。 */
+function setRadarTimes(times){
+  const keep = new Set(times.map(f => f.validtime));
+  for (const [vt, l] of radarLayerByTime)
+    if (!keep.has(vt)){ map.removeLayer(l); radarLayerByTime.delete(vt); }
+
+  radarTimes  = times;
+  radarLayers = times.map(f => {
+    let l = radarLayerByTime.get(f.validtime);
+    if (!l){
+      l = new JmaRadarLayer(
+        `${NOWC_BASE}${f.basetime}/none/${f.validtime}/surf/hrpns/{z}/{x}/{y}.png`,
+        {opacity: 0, maxNativeZoom: RADAR_Z, maxZoom: 18, crossOrigin: 'anonymous'}
+      ).addTo(map);
+      radarLayerByTime.set(f.validtime, l);
+    }
+    return l;
+  });
+  bringWeatherLayersToFront();
+  // 更新後も同じ位置から流し続ける(1枚だけのときは常に先頭)
+  showRadarFrame(Math.min(radarAnimAt, radarLayers.length - 1));
+
+  const first = radarTimes[0], last = radarTimes[radarTimes.length - 1];
+  $('rainLegendTitle').textContent = radarTimes.length > 1
+    ? `雨の強さ ${fmtRadarTime(first.validtime)}〜${fmtRadarTime(last.validtime)}（実況）（mm/h）`
+    : `雨の強さ ${fmtRadarTime(last.validtime)}${last.forecast ? '(予報)' : '(実況)'}（mm/h）`;
+}
+
+function showRadarFrame(i){
+  radarAnimAt = i;
+  const op = +$('radarOp').value / 100;
+  radarLayers.forEach((l, k) => l.setOpacity(k === i ? op : 0));
+  radarLayer = radarLayers[i] || null;
+  updateRadarStamp();
+}
+
+/* 地図の右上の帯。文字は最新の観測時刻に固定し、いま何枚目かは点で示す。
+   0.5秒ごとに時刻が書き換わると読めないので、動かすのは点だけにしている。 */
+function updateRadarStamp(){
+  const stamp = $('radarStamp');
+  const last = radarTimes[radarTimes.length - 1];
+  if (!last){ stamp.hidden = true; return; }
+  stamp.hidden = false;
+  $('radarStampTime').textContent = `雨雲 ${fmtRadarTime(last.validtime)}`;
+  $('radarStampAge').textContent =
+    last.forecast ? 'の予報' : `現在（${radarAgeText(last.validtime)}）`;
+
+  const dots = $('radarStampDots');
+  while (dots.children.length > radarTimes.length) dots.lastChild.remove();
+  while (dots.children.length < radarTimes.length) dots.appendChild(document.createElement('i'));
+  for (let k = 0; k < dots.children.length; k++)
+    dots.children[k].classList.toggle('on', k === radarAnimAt);
+  dots.style.display = radarTimes.length > 1 ? '' : 'none';
+}
+
+function stopRadarAnim(){
+  if (radarAnimTimer){ clearInterval(radarAnimTimer); radarAnimTimer = null; }
+}
+function startRadarAnim(){
+  stopRadarAnim();
+  if (radarLayers.length < 2 || document.hidden) return;
+  radarAnimTimer = setInterval(
+    () => showRadarFrame((radarAnimAt + 1) % radarLayers.length), RADAR_ANIM_MS);
+}
+/* 「◯分前」を進めつつ、1分おきに新しい実況が出ていないか見にいく。
+   リロードを待たずに勝手に追いつくので、いつ更新すればよいか考えなくてよい。
+   地図のレーダーと「雨雲の動き」の読み取りが、この1本の見張りを共有する。 */
+function startRadarWatch(){
+  if (radarWatchTimer) return;
+  radarWatchTimer = setInterval(async () => {
+    if (document.hidden) return;
+    if (radarLayers.length) updateRadarStamp();
+    if (satTimes.length || $('satShow').checked) updateSatStamp();
+
+    // 衛星は2.5分ごとに届くが、拾うのは15分刻みの枠だけ。枠が変わったときに1枚だけ増える。
+    if ($('satShow').checked && satArea().src === 'jma'
+        && Date.now() - satPolledAt >= SAT_POLL_MS){
+      satPolledAt = Date.now();
+      const satReq = satReqId;
+      try {
+        const st = (await ensureLatestSatTimes(true)).slice();
+        const satLast = satTimes[satTimes.length - 1];
+        if (satReq === satReqId && $('satShow').checked && st.length && satLast
+            && st[st.length - 1].validtime !== satLast.validtime){
+          setSatTimes(st);
+          syncSatZoom();
+        }
+      } catch (e){}   // 取れなければ今の絵のまま。「◯分前」が育つので古さは伝わる
+    }
+
+    // 雨雲を見ていない(雲画像だけを出している)ときは、レーダーの時刻一覧までは取りにいかない
+    if (!$('radarShow').checked && !rainMotionAt) return;
+    if (Date.now() - radarPolledAt < RADAR_POLL_MS) return;
+    radarPolledAt = Date.now();
+    const req = radarReqId;
+    let times;
+    try { times = (await ensureLatestRadarTimes(true)).slice(); }
+    catch (e){ return; }   // 取れなければ今の絵のまま。「◯分前」が育つので古さは伝わる
+    const newest = times[times.length - 1].validtime;
+
+    // 地図のレーダー。スライダーで時刻を選んでいる間は、その1枚を勝手に動かさない
+    const last = radarTimes[radarTimes.length - 1];
+    if (req === radarReqId && $('radarShow').checked && !(radarFrames && rainMode === 'radar')
+        && last && newest !== last.validtime)
+      setRadarTimes(times);
+
+    // 読み取り結果も、新しい実況が出ていれば計算し直す
+    if (rainMotionAt && newest !== rainMotionAt) runRainMotion();
+  }, RADAR_WATCH_MS);
+}
+
+// レーダーを消しても、読み取り結果が出ている間は見張りを続ける
+function stopRadarWatchIfIdle(){
+  if (rainMotionAt || $('radarShow').checked || $('satShow').checked) return;
+  if (radarWatchTimer){ clearInterval(radarWatchTimer); radarWatchTimer = null; }
+}
+
+// 画面を見ていない間は止める(通信は起きないが、無駄に電池を使わない)
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden){ stopRadarAnim(); stopSatAnim(); }
+  else { startRadarAnim(); updateRadarStamp(); syncSatZoom(); }
+});
+
 async function updateRadarLayer(){
-  if (radarLayer){ map.removeLayer(radarLayer); radarLayer = null; }
+  const req = ++radarReqId;
+  clearRadarLayers();
   if (!$('radarShow').checked){ updateLegend(); return; }
 
-  // シミュレーション用データがある場合はスライダーの時刻、無ければ最新の実況
-  let f;
-  if (radarFrames && rainMode === 'radar') f = radarFrames[+$('radarTime').value];
+  // シミュレーション用データがある場合はスライダーの時刻の1枚だけ。
+  // 無ければ直近の実況3枚(15分ぶん)を繰り返し流して、雨雲の動く向きが見えるようにする。
+  let times;
+  if (radarFrames && rainMode === 'radar') times = [radarFrames[+$('radarTime').value]];
   else {
-    try { f = await ensureLatestRadarTime(); }
+    try { times = (await ensureLatestRadarTimes()).slice(); }
     catch (e){
+      if (req !== radarReqId) return;
       setStatus('雨雲データを取得できませんでした: ' + e.message, true);
       $('radarShow').checked = false; updateLegend(); return;
     }
-    if (!$('radarShow').checked){ updateLegend(); return; }   // 取得待ちの間に外された
+    // 取得待ちの間にチェックを外された・設定を変えられた場合は、この結果を捨てる
+    if (req !== radarReqId) return;
+    if (!$('radarShow').checked){ updateLegend(); return; }
+    radarPolledAt = latestRadarTimesAt;
   }
-  radarLayer = new JmaRadarLayer(
-    `${NOWC_BASE}${f.basetime}/none/${f.validtime}/surf/hrpns/{z}/{x}/{y}.png`,
-    {opacity: +$('radarOp').value / 100, maxNativeZoom: RADAR_Z, maxZoom: 18, crossOrigin: 'anonymous'}
-  ).addTo(map);
-  radarLayer.bringToFront();
-  $('rainLegendTitle').textContent =
-    `雨の強さ ${fmtRadarTime(f.validtime)}${f.forecast ? '(予報)' : '(実況)'}（mm/h）`;
+  radarAnimAt = times.length - 1;   // まずは最新の1枚を出してから流し始める
+  setRadarTimes(times);
+  startRadarAnim();
+  startRadarWatch();
   updateLegend();
 }
 
@@ -3683,8 +3934,721 @@ $('radarTime').addEventListener('input', () => { updateRadarInfo(); updateRadarL
 $('radarShow').addEventListener('change', updateRadarLayer);
 $('radarOp').addEventListener('input', () => {
   $('radarOpOut').textContent = $('radarOp').value + '%';
-  if (radarLayer) radarLayer.setOpacity(+$('radarOp').value / 100);
+  if (radarLayers.length) showRadarFrame(radarAnimAt);   // 見えている1枚にだけ濃さを反映
 });
+
+/* ================= 衛星の雲画像 =================
+   雨雲レーダーは「いま降っている雨」しか見えない。これから来る雨のもとが近づいているかは、
+   もっと広い範囲の雲を見ないと分からないので、同じ地図の上に重ねられるようにする。
+
+   範囲は3つある。前の2つは気象庁のひまわりタイルをそのまま使い、数時間の動きをくり返し流す。
+     日本周辺     z6まで・2.5分ごと。ただし東経90〜180度・赤道〜北緯66度で切れている
+     ひまわり全球 z5まで・10分ごと。ひまわりが見ている半球ぜんぶ
+
+   3つめの「地球全体」だけは出どころが変わる。ひまわりは東経140.7度に静止しているので、
+   見えるのは中心から約81度まで。1機ではアメリカもヨーロッパも原理的に写らない。
+   そこで EUMETSAT の「静止衛星リング」合成を使う。世界に散らばる静止衛星(ひまわり・GOES・
+   Meteosat ほか)の赤外10.8μm帯を1枚に繋いだもので、経度-180〜180度がまるごと入る。
+
+   NASA GIBS 経由で4機(ひまわり・GOES-West・GOES-East・Meteosat)を自前で重ねる手もあり、
+   そちらは10〜30分前と新しい。ただし機ごとに色の付け方が違うので継ぎ目がはっきり出るうえ、
+   1タイル80〜150KBを4機ぶん読むことになる。継ぎ目の無さと軽さを採ってリングにした。
+   更新は3時間ごとなので、いま近づいている雨は日本周辺かひまわり全球で追うことになる。
+
+   1枚が重いので、この範囲だけは動きを流さず最新の1枚だけを出し、自動更新もしない。 */
+const SAT_BASE  = 'https://www.jma.go.jp/bosai/himawari/data/satimg/';
+const SAT_ATTR  = "<a href='https://www.jma.go.jp/bosai/map.html#contents=himawari' target='_blank'>気象庁 ひまわり</a>";
+const EUM_WMS   = 'https://view.eumetsat.int/geoserver/wms';
+const EUM_ATTR  = "<a href='https://view.eumetsat.int/' target='_blank'>EUMETSAT</a>";
+const SAT_ANIM_MS = 400;            // 1枚あたりの表示時間
+const SAT_POLL_MS = 5*60*1000;      // 新しい観測が出ていないか見にいく間隔
+const SAT_MIN_Z   = 3;              // どの範囲もz3より粗いタイルは無いので、縮小して使う
+
+/* 範囲ごとのちがい。frames × stepMin が、くり返し流す時間の長さになる。 */
+const SAT_AREAS = {
+  jp:     {src:'jma', times:'targetTimes_jp.json', nativeZ:6, maxZ:10, stepMin:15, frames:13},
+  fd:     {src:'jma', times:'targetTimes_fd.json', nativeZ:5, maxZ: 8, stepMin:30, frames:13},
+  global: {src:'mosaic', nativeZ:6, maxZ:6}
+};
+const satArea = () => SAT_AREAS[$('satArea').value] || SAT_AREAS.jp;
+
+/* 全球合成は EUMETSAT の1レイヤー。WMSなので、タイルごとの範囲指定は Leaflet に任せる。 */
+const SAT_RING = {layers: 'mumi:worldcloudmap_ir108', attr: EUM_ATTR};
+
+let satFrames = [];                 // コマの配列。各コマは重ねるレイヤーの配列(合成のときだけ複数)
+let satTimes  = [];                 // 気象庁のコマに対応する観測時刻(合成のときは空)
+let satLayers = [];                 // satFrames を平らにしたもの(前面へ出す・地図への出し入れ用)
+let satAnimAt = 0, satAnimTimer = null;
+let satLayerByKey = new Map();      // 読んであるレイヤーを取っておき、更新では増えた分だけ読む
+let satModeOn = null;               // いま持っているレイヤーがどの範囲・どのバンドのものか
+let satReqId = 0;                   // 時刻一覧の取得中に設定が変わったときの取り違え防止
+let satPolledAt = 0;
+let satMosaicTime = null;           // 合成がいつの観測か(GIBSが応答ヘッダで教えてくれる)
+
+/* 流すぶんの観測時刻。観測はコマ間隔より細かく届くが、そのつど最新の1枚に合わせて拾い直すと
+   13枚すべてのURLがずれて読み直しになる。時計のコマ間隔ちょうどに乗ったものだけを新しい順に
+   13枚拾えば、枠が変わったときに1枚増えるだけで済み、残りはそのまま使い回せる。
+   コマ数を固定しているので、いちばん新しい観測が枠に乗るかどうかで枚数がぶれない。 */
+const satTimeCache = new Map();     // 範囲ごとに持つので、範囲を行き来しても取り直さない
+async function ensureLatestSatTimes(force){
+  const key = $('satArea').value, a = satArea();
+  const hit = satTimeCache.get(key);
+  if (!force && hit && Date.now() - hit.at <= 5*60*1000) return hit.times;
+
+  const j = await fetch(SAT_BASE + a.times).then(r => r.json());
+  const all = j.map(t => ({basetime: t.basetime, validtime: t.validtime}))
+               .sort((x,y) => x.validtime.localeCompare(y.validtime));
+  const picked = [];
+  for (let i = all.length - 1; i >= 0 && picked.length < a.frames; i--){
+    const d = jmaTimeToDate(all[i].validtime);
+    if (d.getUTCMinutes() % a.stepMin === 0 && d.getUTCSeconds() === 0) picked.push(all[i]);
+  }
+  const times = picked.reverse();
+  satTimeCache.set(key, {times, at: Date.now()});
+  return times;
+}
+
+/* 気象庁の衛星タイルは、観測していない所を塗りつぶして返してくる。しかも塗る色がバンドで
+   違う(赤外は白、可視・真彩色は黒)。JPEGなので透明にはできず、そのまま重ねると
+   ひまわりが見ていない範囲まで地図を塗りつぶしてしまう。
+
+   実測すると、観測値のほうはその色に届かない(赤外の最大は254、可視・真彩色は210前後、
+   埋め草はきっかり255/0)。そこでキャンバスに描き直し、ぴったり埋め草の色の画素だけを
+   透明にする。範囲の形を決め打ちしないので、日本域の矩形でも全球の円でもそのまま抜ける。
+   全球合成に使う EUMETSAT の PNG は初めから透明なので、この手当ては要らない。 */
+const satNoDataValue = () => $('satBand').value.endsWith('/TBB') ? 255 : 0;
+
+const SatTileLayer = L.GridLayer.extend({
+  initialize(url, options){
+    this._url = url;
+    L.GridLayer.prototype.initialize.call(this, options);
+  },
+  createTile(coords, done){
+    const size = this.getTileSize();
+    const tile = L.DomUtil.create('canvas', 'leaflet-tile');
+    tile.width = size.x; tile.height = size.y;
+    const ctx = tile.getContext('2d');
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0, size.x, size.y);
+      const d = ctx.getImageData(0, 0, size.x, size.y), p = d.data, f = this.options.noData;
+      for (let i = 0; i < p.length; i += 4)
+        if (p[i] === f && p[i+1] === f && p[i+2] === f) p[i+3] = 0;
+      ctx.putImageData(d, 0, 0);
+      done(null, tile);
+    };
+    img.onerror = () => done(null, tile);   // 配信の無いタイルは空のままにする
+    img.src = L.Util.template(this._url, coords);
+    return tile;
+  }
+});
+
+function satTileUrl(f){
+  return `${SAT_BASE}${f.basetime}/${$('satArea').value}/${f.validtime}` +
+         `/${$('satBand').value}/{z}/{x}/{y}.jpg`;
+}
+
+// maxZoom を範囲ごとの上限にしてあるので、寄りすぎている間は Leaflet 側もタイルを読まない。
+// minNativeZoom は z3。それより引いたときは z3 のタイルを縮小して使う。
+function satLayerOptions(attr){
+  const a = satArea();
+  return {opacity: 0, minNativeZoom: SAT_MIN_Z, maxNativeZoom: a.nativeZ, maxZoom: a.maxZ,
+          attribution: attr};
+}
+const makeJmaLayer = f =>
+  new SatTileLayer(satTileUrl(f), {...satLayerOptions(SAT_ATTR), noData: satNoDataValue()});
+const makeRingLayer = () =>
+  L.tileLayer.wms(EUM_WMS, {...satLayerOptions(SAT_RING.attr), layers: SAT_RING.layers,
+                            format: 'image/png', transparent: true, version: '1.3.0'});
+
+function clearSatLayers(){
+  stopSatAnim();
+  for (const l of satLayerByKey.values()) map.removeLayer(l);
+  satLayerByKey.clear();
+  satFrames = []; satLayers = []; satTimes = []; satAnimAt = 0; satMosaicTime = null;
+  $('satStamp').hidden = true;
+  stopRadarWatchIfIdle();
+}
+
+/* 表示するコマの並びを差し替える。読んであるレイヤーは使い回すので、
+   新しい観測が入っても取りにいくのは増えた1枚だけになる。
+   defs は [{key, make}] の配列の配列で、外側が時間、内側が同時に重ねる衛星。 */
+function setSatFrames(defs){
+  const keep = new Set(defs.flat().map(d => d.key));
+  for (const [k, l] of satLayerByKey)
+    if (!keep.has(k)){ map.removeLayer(l); satLayerByKey.delete(k); }
+
+  satFrames = defs.map(frame => frame.map(({key, make}) => {
+    let l = satLayerByKey.get(key);
+    if (!l){ l = make().addTo(map); satLayerByKey.set(key, l); }
+    return l;
+  }));
+  satLayers = satFrames.flat();
+  bringWeatherLayersToFront();
+  showSatFrame(Math.min(satAnimAt, satFrames.length - 1));
+}
+
+function setSatTimes(times){
+  satTimes = times;
+  setSatFrames(times.map(f => [{key: 'jma:' + f.validtime, make: () => makeJmaLayer(f)}]));
+}
+
+function showSatFrame(i){
+  satAnimAt = i;
+  const op = +$('satOp').value / 100;
+  satFrames.forEach((frame, k) => frame.forEach(l => l.setOpacity(k === i ? op : 0)));
+  updateSatStamp();
+}
+
+/* 地図の右上の帯。数時間ぶんを流すので、いま何枚目かではなく「いつからいつまで」を出す。
+   寄りすぎて消しているときは、なぜ見えないのかをここで伝える。 */
+function updateSatStamp(){
+  const stamp = $('satStamp');
+  if (!$('satShow').checked){ stamp.hidden = true; return; }
+  if (map.getZoom() > satArea().maxZ){
+    stamp.hidden = false;
+    $('satStampTime').textContent = '雲画像';
+    $('satStampAge').textContent  = `ズーム${satArea().maxZ}以下で表示`;
+    return;
+  }
+  if (satArea().src === 'mosaic'){
+    if (!satLayers.length){ stamp.hidden = true; return; }
+    stamp.hidden = false;
+    $('satStampTime').textContent = '雲 全球合成';
+    $('satStampAge').textContent  = satMosaicTime
+      ? `${fmtRadarTime(satMosaicTime)}（${radarAgeText(satMosaicTime)}）`
+      : '3時間ごとの更新';
+    return;
+  }
+  const first = satTimes[0], last = satTimes[satTimes.length - 1];
+  if (!last){ stamp.hidden = true; return; }
+  stamp.hidden = false;
+  $('satStampTime').textContent = satTimes.length > 1
+    ? `雲 ${fmtRadarTime(first.validtime)}→${fmtRadarTime(last.validtime)}`
+    : `雲 ${fmtRadarTime(last.validtime)}`;
+  $('satStampAge').textContent = `最新 ${radarAgeText(last.validtime)}`;
+}
+
+function stopSatAnim(){
+  if (satAnimTimer){ clearInterval(satAnimTimer); satAnimTimer = null; }
+}
+function startSatAnim(){
+  stopSatAnim();
+  if (satFrames.length < 2 || document.hidden) return;
+  satAnimTimer = setInterval(
+    () => showSatFrame((satAnimAt + 1) % satFrames.length), SAT_ANIM_MS);
+}
+
+/* 寄りすぎたら地図から外し、引いたら戻す。レイヤーは捨てないので行き来しても読み直さない。 */
+function syncSatZoom(){
+  if (!$('satShow').checked) return;
+  if (map.getZoom() <= satArea().maxZ && satLayers.length){
+    for (const l of satLayers) if (!l._map) l.addTo(map);
+    bringWeatherLayersToFront();
+    showSatFrame(satAnimAt);
+    startSatAnim();
+  } else {
+    stopSatAnim();
+    for (const l of satLayers) if (l._map) map.removeLayer(l);
+  }
+  updateSatStamp();
+}
+map.on('zoomend', syncSatZoom);
+
+/* 合成がいつのものかは、WMSの能力書類の時間次元(開始/終了/間隔)の終了側に入っている。
+   全体だと280KBあるが mumi だけに絞れば20KB弱なので、範囲を選んだときに1度だけ取りにいく。 */
+async function fetchMosaicTime(){
+  satMosaicTime = null;
+  try {
+    const x = await fetch(`${EUM_WMS}?service=WMS&version=1.3.0&request=GetCapabilities&namespace=mumi`)
+                    .then(r => r.text());
+    const i = x.indexOf(`<Name>${SAT_RING.layers}</Name>`);
+    const layer = x.slice(x.lastIndexOf('<Layer', i), x.indexOf('</Layer>', i));
+    const dim = layer.match(/<Dimension name="time"[^>]*>([^<]*)</);
+    const last = dim && dim[1].split('/')[1];
+    if (last) satMosaicTime = last.replace(/[^0-9]/g, '').slice(0, 14);   // 2026-09-03T21:00:00.000Z → 20260903210000
+  } catch (e){}   // 取れなければ時刻なしで出す。絵そのものは影響を受けない
+}
+
+// 合成のときはバンドを選べない(赤外10.8μmの1製品なので)ため、選択欄を止めて理由が分かるようにする
+function syncSatBandUI(){
+  const mosaic = satArea().src === 'mosaic';
+  $('satBand').disabled = mosaic;
+  $('satBandRow').style.opacity = mosaic ? '.5' : '';
+  $('satMosaicNote').hidden = !mosaic;
+}
+
+async function updateSatLayer(){
+  const req = ++satReqId;
+  syncSatBandUI();
+  if (!$('satShow').checked){ clearSatLayers(); return; }
+  // 範囲やバンドを変えるとURLが変わるので、持っているレイヤーは捨てて読み直す
+  const mode = $('satArea').value + '|' + $('satBand').value;
+  if (satModeOn !== mode){ clearSatLayers(); satModeOn = mode; }
+
+  if (satArea().src === 'mosaic'){
+    satAnimAt = 0;
+    setSatFrames([[{key: 'ring', make: makeRingLayer}]]);
+    syncSatZoom();
+    await fetchMosaicTime();
+    if (req === satReqId && $('satShow').checked) updateSatStamp();
+    startRadarWatch();            // 「◯分前」を進めるためだけに見張りへ相乗りする
+    return;
+  }
+
+  let times;
+  try { times = (await ensureLatestSatTimes()).slice(); }
+  catch (e){
+    if (req !== satReqId) return;
+    setStatus('衛星の雲画像を取得できませんでした: ' + e.message, true);
+    $('satShow').checked = false; clearSatLayers(); return;
+  }
+  // 取得待ちの間にチェックを外された・設定を変えられた場合は、この結果を捨てる
+  if (req !== satReqId || !$('satShow').checked) return;
+  if (!times.length){
+    setStatus('衛星の雲画像の配信時刻を取得できませんでした。', true);
+    $('satShow').checked = false; clearSatLayers(); return;
+  }
+  satPolledAt = Date.now();
+  satAnimAt = times.length - 1;   // まずは最新の1枚を出してから流し始める
+  setSatTimes(times);
+  syncSatZoom();
+  startRadarWatch();              // 「◯分前」と新しい観測の見張りは雨雲レーダーと共有する
+}
+
+$('satShow').addEventListener('change', updateSatLayer);
+$('satArea').addEventListener('change', updateSatLayer);
+$('satBand').addEventListener('change', updateSatLayer);
+$('satOp').addEventListener('input', () => {
+  $('satOpOut').textContent = $('satOp').value + '%';
+  if (satLayers.length) showSatFrame(satAnimAt);   // 見えているコマにだけ濃さを反映
+});
+
+/* ================= 雨雲の動きの読み取り =================
+   気象庁の予報は使わず、実況3枚(5分刻み)のずれだけから雨雲の進む向きと速さを求める。
+   目に見えているパラパラの動きと必ず一致するので、「なぜそう言えるか」が地図の上で確かめられる。
+   そのかわり、これから発達する雲や新しく湧く雲は読めない。 */
+const MOTION_Z      = 8;    // 雨雲タイルの偶数ズーム。緯度35度で約500m/px
+const MOTION_FRAMES = 6;    // 直近25分(5分×5区間)。区間ごとに求めて突き合わせる
+const MOTION_CORE   = 144;  // 流れ場を作る範囲(px)。約75km四方
+const MOTION_BLOCK  = 48;   // ブロック1つの大きさ(px)。約25km四方
+const MOTION_STRIDE = 24;   // ブロックの間隔(px)。半分ずつ重ねて5×5=25個を敷く
+/* 1区間(5分)のずれの探索範囲。20px≒10kmで時速125kmまで追える。
+   10分幅で探すと、広い雨域では相関の山が平らになって最適解が範囲の端まで逃げる
+   (実測で時速100km超の誤答が出た)。5分幅なら山が立ち、区間どうしの一致も確かめられる。 */
+const MOTION_SEARCH = 20;
+const MOTION_REFINE = 6;    // 全体の答えの周りを、ブロックごとに調べ直す幅
+const MOTION_MARGIN = MOTION_SEARCH + MOTION_REFINE;   // 窓に持たせるのりしろ
+const MOTION_MIN_WET  = 0.02;  // ブロックにこれだけ雨が無ければ、そのブロックは使わない
+const MOTION_MIN_CORR = 0.4;   // ブロックの一致がこれ未満なら使わない
+const MOTION_MIN_CSI  = 0.35;  // 答え合わせがこれ未満なら、向きを名乗らない
+const MOTION_MAX_TREND = 5; // 75km四方の雨量が25分で5倍を超えるのは、天気でなく読み取りの誤り
+const MOTION_ACC_CAP = 0.5; // 加速をどこまで先に効かせるか(いまの速さの半分まで)
+const RAIN_TILE_CACHE = 64; // 覚えておく雨雲タイルの枚数(約16MB)
+const RAIN_ON  = 0.5;       // 凡例の最下位階級。これ以上を「降っている」とみなす
+const STALL_KMH = 8;        // これより遅ければ「ほとんど動いていない」
+const AHEAD_MIN = 60;       // 何分先まで見るか
+const COMPASS16 = ['北','北北東','北東','東北東','東','東南東','南東','南南東',
+                   '南','南南西','南西','西南西','西','西北西','北西','北北西'];
+
+const mPerPxAt = (z, lat) => 40075016.686 * Math.cos(lat * Math.PI/180) / worldPx(z);
+
+/* 雨雲タイル1枚を強度(mm/h)の配列に直す。DEMのキャッシュとは分けて、
+   古い時刻のぶんは読み取りのたびに捨てる(5分ごとに時刻が変わるため)。 */
+const rainTiles = new Map();   // "validtime/tx/ty" -> Promise<Float32Array(256*256)|null>
+function loadRainTile(f, tx, ty){
+  const key = `${f.validtime}/${tx}/${ty}`;
+  let p = rainTiles.get(key);
+  if (p) return p;
+  /* 1回の読み取りで30枚ほど使う。地点を渡り歩くと際限なく増えるので、
+     入れた順に古いものから捨てる(1枚256×256のFloat32で256KB)。 */
+  while (rainTiles.size >= RAIN_TILE_CACHE) rainTiles.delete(rainTiles.keys().next().value);
+  p = new Promise(resolve => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onerror = () => resolve(null);        // 観測範囲外などの欠損タイル
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = c.height = 256;
+      const ctx = c.getContext('2d', {willReadFrequently:true});
+      ctx.imageSmoothingEnabled = false;      // 補間すると凡例の色が壊れる
+      ctx.drawImage(img, 0, 0);
+      const d = ctx.getImageData(0, 0, 256, 256).data;
+      const a = new Float32Array(256*256);
+      for (let i = 0; i < a.length; i++) a[i] = decodeRain(d, i*4);
+      resolve(a);
+    };
+    img.src = `${NOWC_BASE}${f.basetime}/none/${f.validtime}/surf/hrpns/${MOTION_Z}/${tx}/${ty}.png`;
+  });
+  rainTiles.set(key, p);
+  return p;
+}
+
+/* MOTION_Z のワールド座標 (x0,y0) から w×h ピクセルぶんの雨の強さを読む */
+async function readRainBox(f, x0, y0, w, h){
+  const jobs = [];
+  for (let ty = Math.floor(y0/256); ty <= Math.floor((y0+h-1)/256); ty++)
+    for (let tx = Math.floor(x0/256); tx <= Math.floor((x0+w-1)/256); tx++)
+      jobs.push(loadRainTile(f, tx, ty).then(a => ({tx, ty, a})));
+  const out = new Float32Array(w*h);
+  for (const {tx, ty, a} of await Promise.all(jobs)){
+    if (!a) continue;                         // 欠損タイルは0のまま扱う
+    const sx = Math.max(0, x0 - tx*256), ex = Math.min(256, x0 + w - tx*256);
+    const sy = Math.max(0, y0 - ty*256), ey = Math.min(256, y0 + h - ty*256);
+    for (let y = sy; y < ey; y++){
+      const row = (ty*256 + y - y0) * w - x0 + tx*256;
+      for (let x = sx; x < ex; x++) out[row + x] = a[y*256 + x];
+    }
+  }
+  return out;
+}
+
+/* 窓の中心 core×core が、10分前の絵をどれだけずらすと一番よく重なるかを探す。
+   粗く2px刻みで当たりを付けてから、その周り1pxを調べ直す。 */
+/* 2枚の絵を、b[p] ≒ a[p-d] となる ずれ d で合わせる。
+   (ox,oy)から w×h の範囲を、(cx,cy)を中心に半径r・刻みstepで探す。 */
+function corrShift(a, b, W, ox, oy, w, h, cx, cy, r, step){
+  let bx = cx, by = cy, bs = -1;
+  const n = w * h;
+  for (let dy = cy-r; dy <= cy+r; dy += step)
+    for (let dx = cx-r; dx <= cx+r; dx += step){
+      if (oy-dy < 0 || oy-dy+h > W || ox-dx < 0 || ox-dx+w > W) continue;
+      let sab = 0, sa = 0, sb = 0, saa = 0, sbb = 0;
+      for (let y = 0; y < h; y++){
+        let ib = (oy+y)*W + ox, ia = (oy+y-dy)*W + ox - dx;
+        for (let x = 0; x < w; x++, ia++, ib++){
+          const va = a[ia], vb = b[ib];
+          sab += va*vb; sa += va; sb += vb; saa += va*va; sbb += vb*vb;
+        }
+      }
+      const vaa = saa - sa*sa/n, vbb = sbb - sb*sb/n;
+      const s = (vaa > 1e-6 && vbb > 1e-6) ? (sab - sa*sb/n)/Math.sqrt(vaa*vbb) : -1;
+      if (s > bs){ bs = s; bx = dx; by = dy; }
+    }
+  return {dx: bx, dy: by, corr: bs};
+}
+
+// 2×2をまとめて半分の大きさにする。粗く当たりを付ける段で使う
+function downsample2(a, W){
+  const H = W >> 1, out = new Float32Array(H*H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < H; x++)
+      out[y*H+x] = (a[(2*y)*W+2*x] + a[(2*y)*W+2*x+1]
+                  + a[(2*y+1)*W+2*x] + a[(2*y+1)*W+2*x+1]) / 4;
+  return out;
+}
+
+// 範囲のうち、雨が降っている画素の割合
+function wetFrac(a, W, ox, oy, w, h){
+  let n = 0;
+  for (let y = 0; y < h; y++){
+    let i = (oy+y)*W + ox;
+    for (let x = 0; x < w; x++, i++) if (a[i] >= RAIN_ON) n++;
+  }
+  return n / (w*h);
+}
+
+const compassOf = (dx, dy) =>          // 画面座標(+x=東, +y=南)の向きを16方位に直す
+  COMPASS16[((Math.round(Math.atan2(dx, -dy) * 8 / Math.PI) % 16) + 16) % 16];
+
+let rainMotionAt = null;               // 読み取りに使った最新実況の時刻(自動再計算の判定用)
+
+async function analyzeRainMotion(){
+  const p = activePlace();
+  if (!p) return {kind:'none', msg:'先に「マイ地点」で地点を選んでください。'};
+
+  const j = await fetch(NOWC_BASE + 'targetTimes_N1.json').then(r => r.json());
+  const obs = j.map(t => ({basetime:t.basetime, validtime:t.validtime, forecast:false}))
+               .sort((a,b) => a.validtime.localeCompare(b.validtime));
+  if (obs.length < MOTION_FRAMES) return {kind:'none', msg:'実況がそろっていません。'};
+
+  const hist = obs.slice(-13);          // 居座りの判断に使う直近1時間
+  // 使わない時刻のタイルは捨てる。5分ごとに時刻が変わるので、放っておくと際限なく貯まる
+  const live = new Set(hist.map(t => t.validtime));
+  for (const k of [...rainTiles.keys()]) if (!live.has(k.split('/')[0])) rainTiles.delete(k);
+
+  const frames = obs.slice(-MOTION_FRAMES);       // 古い順
+  const fLast = frames[frames.length-1];
+  const spanMin = Math.round(
+    (jmaTimeToDate(fLast.validtime) - jmaTimeToDate(frames[0].validtime)) / 60000);
+  const px = lngToX(p.lng, MOTION_Z), py = latToY(p.lat, MOTION_Z);
+  const rad = 2;                        // 地点まわり約1km四方を見る
+
+  // --- 過去1時間、この地点で降っていたか(10分では居座りを判断できない) ---
+  const histBox = await Promise.all(hist.map(f =>
+    readRainBox(f, Math.round(px)-rad, Math.round(py)-rad, 2*rad+1, 2*rad+1)));
+  const wetFrames = histBox.filter(a => Math.max(...a) >= RAIN_ON).length;
+  const nowMmh = Math.max(...histBox[histBox.length-1]);
+  const base = {kind:'ok', place:p, at:fLast, nowMmh, spanMin,
+                wetFrames, histFrames: hist.length, histMin:(hist.length-1)*5};
+
+  // --- 6枚ぶんの窓を読む ---
+  const M = MOTION_MARGIN, W = MOTION_CORE + 2*M;
+  const wx0 = Math.round(px - W/2), wy0 = Math.round(py - W/2);
+  const A = await Promise.all(frames.map(f => readRainBox(f, wx0, wy0, W, W)));
+  if (wetFrac(A[0], W, M, M, MOTION_CORE, MOTION_CORE) < MOTION_MIN_WET ||
+      wetFrac(A[A.length-1], W, M, M, MOTION_CORE, MOTION_CORE) < MOTION_MIN_WET)
+    return {...base, kind:'dry'};
+
+  /* --- 区間(5分)ごと・ブロックごとのずれ ---
+     まず半分の解像度で全体の当たりを付け、その周りだけをブロックごとに調べ直す。
+     こうすると探索が全体の答えに繋がれるので、広い雨域でも範囲の端まで逃げない。 */
+  const half = A.map(a => downsample2(a, W));
+  const W2 = W>>1, M2 = M>>1, C2 = MOTION_CORE>>1, S2 = MOTION_SEARCH>>1;
+  const nb = (MOTION_CORE - MOTION_BLOCK)/MOTION_STRIDE + 1;
+  const pairs = [];
+  for (let i = 0; i+1 < A.length; i++){
+    const g = corrShift(half[i], half[i+1], W2, M2, M2, C2, C2, 0, 0, S2, 1);
+    const gx = g.dx*2, gy = g.dy*2, blocks = [];
+    for (let iy = 0; iy < nb; iy++)
+      for (let ix = 0; ix < nb; ix++){
+        const ox = M + ix*MOTION_STRIDE, oy = M + iy*MOTION_STRIDE;
+        const wet = wetFrac(A[i+1], W, ox, oy, MOTION_BLOCK, MOTION_BLOCK);
+        if (wet < MOTION_MIN_WET) continue;
+        let r = corrShift(A[i], A[i+1], W, ox, oy, MOTION_BLOCK, MOTION_BLOCK,
+                          gx, gy, MOTION_REFINE, 2);
+        r = corrShift(A[i], A[i+1], W, ox, oy, MOTION_BLOCK, MOTION_BLOCK, r.dx, r.dy, 1, 1);
+        if (r.corr < MOTION_MIN_CORR) continue;
+        blocks.push({ix, iy, dx:r.dx, dy:r.dy, corr:r.corr, w: wet*r.corr});
+      }
+    pairs.push({gx, gy, gcorr:g.corr, blocks});
+  }
+
+  /* 選んだ区間から流れ場を組む。ブロックごとに雨量と一致度で重みづけして平均し、
+     雨が無くて決まらなかったブロックは全体の平均で埋める。 */
+  const buildFlow = prs => {
+    const fx = new Float32Array(nb*nb), fy = new Float32Array(nb*nb), fw = new Float32Array(nb*nb);
+    let sx = 0, sy = 0, sw = 0;
+    for (const pr of prs) for (const b of pr.blocks){
+      const k = b.iy*nb + b.ix;
+      fx[k] += b.dx*b.w; fy[k] += b.dy*b.w; fw[k] += b.w;
+      sx += b.dx*b.w; sy += b.dy*b.w; sw += b.w;
+    }
+    if (sw <= 0) return null;
+    const mx = sx/sw, my = sy/sw;
+    let sp = 0, cnt = 0;
+    for (let k = 0; k < fx.length; k++){
+      if (fw[k] > 0){ fx[k] /= fw[k]; fy[k] /= fw[k]; sp += (fx[k]-mx)**2 + (fy[k]-my)**2; cnt++; }
+      else { fx[k] = mx; fy[k] = my; }
+    }
+    const at = (x, y) => {          // 窓の座標から、その場所の流れを読む(線形に混ぜる)
+      const u = (x - M - MOTION_BLOCK/2)/MOTION_STRIDE, v = (y - M - MOTION_BLOCK/2)/MOTION_STRIDE;
+      const i0 = Math.max(0, Math.min(nb-1, Math.floor(u))), i1 = Math.min(nb-1, i0+1);
+      const j0 = Math.max(0, Math.min(nb-1, Math.floor(v))), j1 = Math.min(nb-1, j0+1);
+      const tu = Math.max(0, Math.min(1, u-i0)), tv = Math.max(0, Math.min(1, v-j0));
+      const g = a => (a[j0*nb+i0]*(1-tu) + a[j0*nb+i1]*tu)*(1-tv)
+                   + (a[j1*nb+i0]*(1-tu) + a[j1*nb+i1]*tu)*tv;
+      return {vx: g(fx), vy: g(fy)};
+    };
+    return {mx, my, at, spread: cnt ? Math.sqrt(sp/cnt) : 0, blocks: cnt};
+  };
+
+  const flow = buildFlow(pairs);
+  if (!flow || flow.blocks < 4) return {...base, kind:'unclear', reason:'blocks'};
+
+  // --- 区間ごとの代表速度。ここから ばらつき・加速・向きの変化 を見る ---
+  const perPair = pairs.map((pr, i) => {
+    const f = buildFlow([pr]);
+    return f ? {i, dx:f.mx, dy:f.my} : null;
+  }).filter(Boolean);
+  if (perPair.length < 3) return {...base, kind:'unclear', reason:'blocks'};
+
+  const mi  = perPair.reduce((s,d)=>s+d.i, 0)/perPair.length;
+  const mvx = perPair.reduce((s,d)=>s+d.dx,0)/perPair.length;
+  const mvy = perPair.reduce((s,d)=>s+d.dy,0)/perPair.length;
+  const spread = Math.sqrt(perPair.reduce(
+    (s,d)=>s+(d.dx-mvx)**2+(d.dy-mvy)**2, 0)/perPair.length);
+  const slope = (key, mean) => {
+    let sii = 0, siv = 0;
+    for (const d of perPair){ sii += (d.i-mi)**2; siv += (d.i-mi)*(d[key]-mean); }
+    return sii > 0 ? siv/sii : 0;      // 1区間(5分)あたりの速度の変化
+  };
+  const ax = slope('dx', mvx), ay = slope('dy', mvy);
+  const iFirst = perPair[0].i, iLast = perPair[perPair.length-1].i;
+  const vx = mvx + ax*(iLast-mi),  vy = mvy + ay*(iLast-mi);    // 直近の速度
+  const v0x = mvx + ax*(iFirst-mi), v0y = mvy + ay*(iFirst-mi); // 25分前の速度
+  const speedPx = Math.hypot(vx, vy);
+  const moving = speedPx >= 1.5;       // 5分で1.5px(約0.8km)＝時速約9km
+
+  /* --- 答え合わせ ---
+     最後の区間を伏せて流れ場を作り、1つ前の絵を動かして最新の絵を当ててみる。
+     「動かさずに置いた場合」に勝てなければ、向きを名乗らない。 */
+  const vf = buildFlow(pairs.slice(0, -1)) || flow;
+  const last = A.length-1;
+  let hit=0, mis=0, fal=0, hit0=0, mis0=0, fal0=0;
+  for (let y = 0; y < MOTION_CORE; y++)
+    for (let x = 0; x < MOTION_CORE; x++){
+      const X = M+x, Y = M+y;
+      const f = vf.at(X, Y);
+      const sxp = Math.round(X - f.vx), syp = Math.round(Y - f.vy);
+      const pred = (sxp>=0 && sxp<W && syp>=0 && syp<W) ? A[last-1][syp*W+sxp] : 0;
+      const act = A[last][Y*W+X] >= RAIN_ON;
+      if (pred >= RAIN_ON){ act ? hit++ : fal++; } else if (act) mis++;
+      const still = A[last-1][Y*W+X] >= RAIN_ON;
+      if (still){ act ? hit0++ : fal0++; } else if (act) mis0++;
+    }
+  const csi  = hit /(hit +mis +fal  || 1);
+  const csi0 = hit0/(hit0+mis0+fal0 || 1);
+  if (moving && (csi < MOTION_MIN_CSI || csi <= csi0))
+    return {...base, kind:'unclear', reason:'csi', csi, csi0};
+
+  const mpp = mPerPxAt(MOTION_Z, p.lat);
+  const toKmh = pxPer5 => pxPer5 * mpp / 1000 * 12;
+  const kmh = toKmh(speedPx), kmh0 = toKmh(Math.hypot(v0x, v0y));
+  const turn = moving && Math.hypot(v0x, v0y) >= 1.5
+    ? ((Math.atan2(vx,-vy) - Math.atan2(v0x,-v0y)) * 180/Math.PI + 540) % 360 - 180 : 0;
+
+  /* --- 強さの移り変わり。雲を追いかけて区間ごとに比べ、掛け合わせる ---
+     窓を固定して比べると、雲が出入りしただけで増減して見える。 */
+  let trend = 1, trendOk = true;
+  for (let i = 0; i+1 < A.length; i++){
+    const d = perPair.find(q => q.i === i) || {dx:mvx, dy:mvy};
+    const dx = Math.round(d.dx), dy = Math.round(d.dy);
+    let m0 = 0, m1 = 0;
+    for (let y = 0; y < MOTION_CORE; y++){
+      let i1 = (M+y)*W + M, i0 = (M+y-dy)*W + M - dx;
+      for (let x = 0; x < MOTION_CORE; x++, i0++, i1++){ m0 += A[i][i0]; m1 += A[i+1][i1]; }
+    }
+    const n = MOTION_CORE*MOTION_CORE;
+    if (m0/n >= 0.05) trend *= m1/m0; else trendOk = false;
+  }
+  if (!trendOk || trend > MOTION_MAX_TREND || trend < 1/MOTION_MAX_TREND) trend = null;
+
+  /* --- 到達時間 ---
+     地点から時間をさかのぼり、その場所ごとの流れで1分ずつ後ろへ歩く。
+     加速も効かせるが、遠い先で暴れないよう変化幅を抑える。 */
+  let arriveMin = null, arriveMmh = 0;
+  if (nowMmh < RAIN_ON && moving){
+    const path = [];
+    let cx = px - wx0, cy = py - wy0;
+    for (let t = 1; t <= AHEAD_MIN; t++){
+      const f = flow.at(cx, cy);
+      let dax = ax*(t/5), day = ay*(t/5);
+      const cap = MOTION_ACC_CAP * speedPx, dd = Math.hypot(dax, day);
+      if (dd > cap && dd > 0){ dax *= cap/dd; day *= cap/dd; }
+      cx -= (f.vx + dax)/5; cy -= (f.vy + day)/5;
+      path.push([wx0 + cx, wy0 + cy]);
+    }
+    const xs = path.map(q=>q[0]), ys = path.map(q=>q[1]);
+    const rx0 = Math.floor(Math.min(px, ...xs)) - rad - 1;
+    const ry0 = Math.floor(Math.min(py, ...ys)) - rad - 1;
+    const rw = Math.ceil(Math.max(px, ...xs)) - rx0 + rad + 2;
+    const rh = Math.ceil(Math.max(py, ...ys)) - ry0 + rad + 2;
+    const ray = await readRainBox(fLast, rx0, ry0, rw, rh);
+    for (let t = 0; t < path.length; t++){
+      const qx = Math.round(path[t][0]) - rx0, qy = Math.round(path[t][1]) - ry0;
+      let peak = 0;
+      for (let y = Math.max(0,qy-rad); y <= Math.min(rh-1,qy+rad); y++)
+        for (let x = Math.max(0,qx-rad); x <= Math.min(rw-1,qx+rad); x++){
+          const v = ray[y*rw+x]; if (v > peak) peak = v;
+        }
+      if (peak >= RAIN_ON){ arriveMin = t+1; arriveMmh = peak; break; }
+    }
+  }
+
+  return {...base, kmh, kmh0, moving, turn, trend, arriveMin, arriveMmh,
+          from: compassOf(-vx, -vy), to: compassOf(vx, vy),
+          csi, csi0, spreadKmh: toKmh(spread), flowSpreadKmh: toKmh(flow.spread),
+          blocks: flow.blocks, pairsUsed: perPair.length};
+}
+
+/* 判定の重さ。すでに降っている・まもなく届く・居座っている ほど重く出す。 */
+function rainMotionLevel(r){
+  // 読み取れなかったときは近くに雨雲がある。全く問題なしには見せない
+  if (r.kind === 'unclear') return r.nowMmh >= RAIN_ON ? 'warn' : 'caution';
+  if (r.kind !== 'ok') return 'safe';
+  const stall = r.wetFrames >= r.histFrames * 0.7;
+  if (r.nowMmh >= RAIN_ON) return (stall || r.trend >= 1.3 || r.nowMmh >= 20) ? 'danger' : 'warn';
+  if (r.arriveMin != null) return r.arriveMin <= 30 ? 'warn' : 'caution';
+  return 'safe';
+}
+
+function renderRainMotion(r){
+  const box = $('rainMotionResult');
+  if (!r){ box.className = ''; box.innerHTML = ''; return; }
+  if (r.kind === 'none'){
+    box.className = ''; box.innerHTML = `<span class="hint">${escapeHtml(r.msg)}</span>`;
+    return;
+  }
+  box.className = 'verdict lv-' + rainMotionLevel(r);
+  const L = [`<b>${escapeHtml(r.place.name)}</b>`];
+  const pct = v => Math.round(v*100);
+  const mmh = v => v >= 10 ? Math.round(v) : +v.toFixed(1);
+
+  if (r.kind === 'dry'){
+    L.push('この地点の周り約75kmに雨雲がほとんどありません。');
+  } else if (r.kind === 'unclear'){
+    L.push('近くに雨雲はありますが、動きがはっきりせず<b>進む向きを読み取れませんでした</b>。' +
+           '地図に雨雲を重ねて、目で動きを確かめてください。');
+    if (r.nowMmh >= RAIN_ON) L.push(`いまこの地点は <b>${mmh(r.nowMmh)}mm/h</b> の雨です。`);
+    if (r.reason === 'csi')
+      L.push(`<span class="hint">答え合わせで、動かさずに置いた場合（${pct(r.csi0)}%）を` +
+             `上回れませんでした（${pct(r.csi)}%）。</span>`);
+  } else {
+    if (r.nowMmh >= RAIN_ON) L.push(`いま降っています（<b>${mmh(r.nowMmh)}mm/h</b>）。`);
+    else if (r.arriveMin != null)
+      L.push(`あと<b>約${r.arriveMin}分</b>で降り出す見込みです` +
+             `（届く雨の強さ 約${mmh(r.arriveMmh)}mm/h）。`);
+    else L.push(`${AHEAD_MIN}分先まで、この地点に届く雨雲は見当たりません。`);
+
+    L.push(!r.moving
+      ? `雨雲はほとんど動いていません（時速${r.kmh.toFixed(0)}km）。同じ場所に降り続きます。`
+      : `雨雲は<b>${r.from}から${r.to}へ 時速${r.kmh.toFixed(0)}km</b>で流れています。`);
+
+    // この25分での、速さと向きの移り変わり
+    if (r.moving){
+      const ch = [];
+      if (r.kmh >= r.kmh0*1.25)
+        ch.push(`速まっています（時速${r.kmh0.toFixed(0)}→${r.kmh.toFixed(0)}km）`);
+      else if (r.kmh <= r.kmh0*0.8)
+        ch.push(`遅くなっています（時速${r.kmh0.toFixed(0)}→${r.kmh.toFixed(0)}km）`);
+      if (Math.abs(r.turn) >= 25)
+        ch.push(`進む向きが${r.turn > 0 ? '右' : '左'}へ${Math.abs(r.turn).toFixed(0)}度変わっています`);
+      if (ch.length) L.push(`この${r.spanMin}分で ` + ch.join('、') + '。');
+      if (r.flowSpreadKmh >= 15)
+        L.push(`場所によって動きが違います（ばらつき 時速±${r.flowSpreadKmh.toFixed(0)}km）。` +
+               '上の見積もりは地点まわりの流れによるものです。');
+    }
+
+    if (r.trend != null){
+      if (r.trend >= 1.3)
+        L.push(`この${r.spanMin}分で雨は<b>${r.trend.toFixed(1)}倍</b>に強まっています。`);
+      else if (r.trend <= 0.77)
+        L.push(`この${r.spanMin}分で雨は弱まっています（${r.trend.toFixed(1)}倍）。`);
+      else L.push('強さはほぼ横ばいです。');
+    }
+  }
+  if (r.wetFrames > 0)
+    L.push(`この${r.histMin}分のうち` +
+      `<b>${Math.round(r.wetFrames / r.histFrames * r.histMin)}分</b>、この地点で降っています。` +
+      (r.wetFrames >= r.histFrames * 0.7 ? '<b>降り続いています。</b>' : ''));
+
+  const src = `${fmtRadarTime(r.at.validtime)} の実況（${radarAgeText(r.at.validtime)}）をもとに計算`;
+  L.push(`<span class="hint">${
+    r.kind === 'ok'
+      ? `答え合わせ：直前の5分を予測すると 雨の範囲が<b>${pct(r.csi)}%</b>一致` +
+        `（動かさない場合 ${pct(r.csi0)}%）。${src}`
+      : src}</span>`);
+  box.innerHTML = L.join('<br>');
+}
+
+async function runRainMotion(){
+  const btn = $('btnRainMotion');
+  btn.disabled = true;
+  try {
+    const r = await analyzeRainMotion();
+    rainMotionAt = r.kind === 'none' ? null : r.at.validtime;
+    renderRainMotion(r);
+    if (rainMotionAt) startRadarWatch();     // 新しい実況が届いたら自動で計算し直す
+  } catch (e){
+    renderRainMotion({kind:'none', msg:'雨雲データを取得できませんでした: ' + e.message});
+    rainMotionAt = null;
+  } finally {
+    btn.disabled = false;
+  }
+}
+$('btnRainMotion').addEventListener('click', runRainMotion);
 
 let rainMode = 'manual';
 function setRainMode(m){
@@ -4805,7 +5769,7 @@ function updateHazardLayer(spec){
   } else if (layer && layer._map){
     layer.remove();
   }
-  if (radarLayer) radarLayer.bringToFront();   // 雨雲レーダーは常に最前面に保つ
+  bringWeatherLayersToFront();                         // 雨雲レーダーは常に最前面に保つ
 }
 
 for (const spec of HAZARD_LAYERS)
@@ -5743,7 +6707,9 @@ function updateActionSummary(){
 }
 
 /* ================= 操作値と表示位置の永続化 ================= */
-const SETTING_IDS = ['baseMap','rrim','rrimOp','radarShow','radarOp','terrainViz','vizGain',
+const SETTING_IDS = ['baseMap','rrim','rrimOp','radarShow','radarOp',
+  'satShow','satArea','satBand','satOp',
+  'terrainViz','vizGain',
   'tex3d','texRes','exag3d','rainRate','rainDur','sewerPreset','sewerRate','sewerStore',
   'surfacePreset','infilRate','flowSmooth','edgeDrain','simSpeed',
   'hzFlood','hzHightide','hzKaoku','hzKeizoku','hzOp','showFlowDir',
@@ -5786,6 +6752,7 @@ function restoreSettings(){
   $('vizGainOut').textContent  = '×' + $('vizGain').value;
   $('rrimOpOut').textContent   = $('rrimOp').value + '%';
   $('radarOpOut').textContent  = $('radarOp').value + '%';
+  $('satOpOut').textContent    = $('satOp').value + '%';
   $('hzOpOut').textContent     = $('hzOp').value + '%';
   rrimLayer.setOpacity(+$('rrimOp').value / 100);
   for (const spec of HAZARD_LAYERS) if ($(spec.id).checked) updateHazardLayer(spec);
@@ -5797,6 +6764,7 @@ function restoreSettings(){
   if ($('baseMap').value !== 'pale') $('baseMap').dispatchEvent(new Event('change'));
   if ($('rrim').checked) $('rrim').dispatchEvent(new Event('change'));
   if ($('radarShow').checked) $('radarShow').dispatchEvent(new Event('change'));
+  if ($('satShow').checked) $('satShow').dispatchEvent(new Event('change'));
   return saved;
 }
 
