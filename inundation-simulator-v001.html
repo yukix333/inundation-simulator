@@ -2531,7 +2531,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
 "use strict";
 /* ================= 地図 ================= */
 // ＋／－ボタンは出さない(ピンチ/ホイール/ダブルタップで操作する)
-const map = L.map('map', {zoomControl:false}).setView([35.686, 139.81], 14); // 東京・江東ゼロメートル地帯
+/* zoomSnap:0 は「段の途中で止まれる」ようにするための指定で、これ自体は操作量を変えない。
+   ホイール/トラックパッドの効き方は Leaflet 標準をやめて下の自前ハンドラで決める
+   (標準のままここを0にすると、1目盛りの変化量が切り上げられなくなって寄らなくなる)。 */
+const map = L.map('map', {zoomControl:false, zoomSnap:0}).setView([35.686, 139.81], 14); // 東京・江東ゼロメートル地帯
 const $ = id => document.getElementById(id);
 // 地図の現在の拡大率を左上に常時表示する。読むだけの表示なので操作は素通しさせる。
 const zoomLevelControl = L.control({position:'topleft'});
@@ -2541,9 +2544,82 @@ zoomLevelControl.onAdd = () => {
   return el;
 };
 zoomLevelControl.addTo(map);
-function updateZoomLevel(){ $('zoomLevel').textContent = `Zoom ${map.getZoom()}`; }
+// zoomSnap:0 なのでズームは小数を取る。小数第1位まで見せ、整数なら整数のまま出す。
+// (連続ズームは足し込みなので 18.000000000000004 のような端数が出る。先に丸める)
+function updateZoomLevel(){
+  const z = Math.round(map.getZoom() * 10) / 10;
+  $('zoomLevel').textContent = `Zoom ${Number.isInteger(z) ? z : z.toFixed(1)}`;
+}
 updateZoomLevel();
-map.on('zoomend', updateZoomLevel);
+// ジェスチャ中は zoomend が出ない(出るのは手が止まってから)ので 'zoom' でも更新する
+map.on('zoom zoomend', updateZoomLevel);
+
+/* ================= ホイール／トラックパッドの拡大縮小 =================
+   Leaflet標準は、届いたwheelイベントを wheelDebounceTime(40ms)ぶん溜めてから、
+   250msかけて1段ズームする。マウスのカチカチ送りならこれで合うが、トラックパッドは
+   細かいイベントが切れ目なく届くので、「溜め→アニメ」が常に指より遅れて追いかける形になり、
+   指を止めてもまだ動いている＝食いつかない感触になる。
+
+   そこで入力を刻みの細かさで振り分ける。
+   ・細かい刻み（トラックパッドの二本指・ピンチ、Magic Mouse など）
+       1イベントごとに、アニメーション無しでその場の倍率を変える。溜めもアニメも挟まないので、
+       指を止めればそこで止まる＝指の動きと1対1で対応する。
+   ・粗い刻み（ふつうのマウスホイールの1目盛り）
+       従来どおりアニメーション付きで、整数1段ずつ動かす。カチッと1段送る操作なので、
+       ここは連続にするより段に揃えたほうが読みやすい。 */
+const WHEEL_COARSE_PX    = 60;    // ピクセル単位でこれ以上届いたら「マウスの1目盛り」とみなす
+const WHEEL_PX_PER_LEVEL = 100;   // 細かい刻み: 何px送ると1段ぶんか
+const PINCH_PX_PER_LEVEL = 30;    // ピンチ(ctrl+wheel)は移動量が小さいので強めに効かせる
+const WHEEL_MAX_STEP     = 2;     // 1イベントで動かす上限の段数(暴れ止め)
+const WHEEL_SETTLE_MS    = 120;   // 最後のイベントからこれだけ静かならジェスチャ終了とみなす
+
+let wheelSettle = 0;
+/* カーソルの下の地点を動かさずに倍率だけ変える。中心の求め方は setZoomAround と同じ。
+
+   ただし setView は使わない。setView(animate:false) は1イベントごとに viewprereset を出し、
+   タイル層が持っているタイルを全部捨てて読み直す(Leafletの _invalidateAll)。
+   トラックパッドのように毎フレーム届く入力で呼ぶと読み直しが間に合わず、
+   操作している間ずっと地図が白いままになる。
+   代わりに、Leafletがピンチ操作で使うのと同じ _move を直接呼ぶ。{pinch:true} は
+   タイル層への「ジェスチャ中なのでいまのタイルは捨てるな」という合図で、
+   すでに出ている絵を拡大したまま中心と倍率だけ差し替えられる。 */
+function wheelZoomTo(at, zoom){
+  /* 直前のマウス送りのアニメーションが走っていたら、そこで打ち切って確定させる。
+     放っておくとアニメの終わりに行き先の倍率へ引き戻され、間の指の動きが消える。
+     _onZoomTransitionEnd 自身が実行中かどうかを見ているので、二重に呼んでも害はない。 */
+  if (map._animatingZoom) map._onZoomTransitionEnd();
+  const z = map._limitZoom(zoom);
+  const half   = map.getSize().divideBy(2);
+  const offset = at.subtract(half).multiplyBy(1 - 1 / map.getZoomScale(z));
+  map._move(map.containerPointToLatLng(half.add(offset)), z, {pinch: true, round: false});
+  // 手が止まったところで moveend を出す。地形の取得も設定の保存もここから走る。
+  clearTimeout(wheelSettle);
+  wheelSettle = setTimeout(() => map._moveEnd(true), WHEEL_SETTLE_MS);
+}
+
+map.scrollWheelZoom.disable();
+map.getContainer().addEventListener('wheel', ev => {
+  ev.preventDefault();            // 地図の上ではページを送らない(Leaflet標準と同じ)
+  if (!ev.deltaY) return;
+  const at = map.mouseEventToContainerPoint(ev);
+  /* トラックパッドは必ずピクセル単位(deltaMode 0)で届く。行・ページ単位で届くのは
+     カチカチ送りのマウスだけ(Firefoxは1目盛り=3行)なので、刻みの大小を見るまでもなく
+     粗い扱いにする。ここをpxに換算して大小で判定すると、Firefoxのマウスが
+     細かい刻み側へ落ちて半段しか進まなくなる。 */
+  const coarse = ev.deltaMode !== 0 || Math.abs(ev.deltaY) >= WHEEL_COARSE_PX;
+  if (coarse && !ev.ctrlKey){
+    // 半端な位置に居ても、マウス送りは整数段へ揃えてから1段動かす(アニメーション付き)
+    map.setZoomAround(at, Math.round(map.getZoom()) + (ev.deltaY > 0 ? -1 : 1));
+    return;
+  }
+  // 行・ページ単位のピンチ(Firefox)も来うるので、ここだけはpxに換算しておく
+  const px = ev.deltaMode === 1 ? ev.deltaY * 16
+           : ev.deltaMode === 2 ? ev.deltaY * map.getSize().y
+           : ev.deltaY;
+  const per  = ev.ctrlKey ? PINCH_PX_PER_LEVEL : WHEEL_PX_PER_LEVEL;
+  const step = Math.max(-WHEEL_MAX_STEP, Math.min(WHEEL_MAX_STEP, -px / per));
+  wheelZoomTo(at, map.getZoom() + step);
+}, {passive: false});
 const GSI_ATTR = "<a href='https://maps.gsi.go.jp/development/ichiran.html' target='_blank'>国土地理院</a>";
 const baseLayer = kind => {
   const [src, ext] = kind === 'photo' ? ['seamlessphoto', 'jpg']
@@ -2597,6 +2673,7 @@ let rafId = 0;
 let mode = 'quick';            // 'quick' | 'sim'
 let lastWaterRenderMs = -Infinity;
 let capturing = false;         // 地形取得(タイル通信)が進行中かどうか。多重実行を防ぐ
+let captureAgain = false;      // 取得中に地図が動いた。終わり次第もう一度取る
 let gridGen = 0;               // gridを作り直すたびに進む世代番号。古い計算ループの打ち切りに使う
 
 const overlay = $('overlay');
@@ -2621,8 +2698,10 @@ function updateOverlayTransform(){
   overlay.style.width  = (se.x - nw.x) + 'px';
   overlay.style.height = (se.y - nw.y) + 'px';
 }
-// ズーム確定時とレイヤ原点の再設定時に貼り直す(平行移動はペインが自動で追従する)
-map.on('zoomend viewreset resize', updateOverlayTransform);
+/* ズーム確定時とレイヤ原点の再設定時に貼り直す(平行移動はペインが自動で追従する)。
+   'zoom' も拾うのは、ホイール/トラックパッドの連続ズーム中に飛ぶのがこれだけだから。
+   拾わないと、手を動かしている間だけ水面が地形からずれて見える。 */
+map.on('zoom zoomend viewreset resize', updateOverlayTransform);
 
 // ズームアニメーション中は、タイルと同じ要領で移動量と拡大率を先回りして当てる。
 // (これをしないと、アニメーションの間だけベース地図とオーバーレイがずれる)
@@ -3254,8 +3333,10 @@ function decodeElev(data, k){
 }
 
 async function captureTerrain(){
-  // 取得処理中は多重実行しない。取得済みでも、地図を動かしたときは取り直す。
-  if (capturing) return;
+  // 取得処理中は多重実行しない。ただしその間に地図が動いていたら、
+  // 取り終わってから今の表示範囲で取り直す(古い範囲の地形が残らないようにする)。
+  if (capturing){ captureAgain = true; return; }
+  captureAgain = false;
   if (map.getZoom() < 13){
     setStatus('範囲が広すぎます。ズーム13以上にしてください。', true);
     return;
@@ -3411,18 +3492,30 @@ async function captureTerrain(){
   drawFlowArrows();
   updateStats();
   capturing = false;
+  if (captureAgain) scheduleCapture();   // 取得中に動かされていた分をここで拾う
 }
 
-// 地図の移動・ズームが止まるたびに、その場所の地形を自動取得し直す。
-// 地図は常に操作できるので、計算中に動かした場合は移動先で取り直しになる。
-map.on('moveend', () => {
-  if (map.getZoom() < 13){
-    // 広域では取得しない。既存のレイヤーは取得済みエリアに貼り付いたまま追従する。
-    if (grid) setStatus('ズーム13以上で、表示範囲の地形を取得します（現在の表示は取得済みエリアのみ）。');
-    return;
-  }
-  captureTerrain().catch(e => setStatus('地形の自動取得に失敗しました: ' + e.message, true));
-});
+/* 地図の移動・ズームが止まるたびに、その場所の地形を自動取得し直す。
+   ただしすぐには走らせない。続けて何段もズームすると moveend が短い間隔で何度も飛び、
+   そのたびにタイル通信とグリッド再構築を始めると、操作中の描画がつっかえる。
+   少し待って、手が止まったところで1回だけ取る。 */
+const CAPTURE_DELAY_MS = 250;
+let captureTimer = 0;
+function scheduleCapture(){
+  clearTimeout(captureTimer);
+  captureTimer = setTimeout(() => {
+    if (map.getZoom() < 13){
+      // 広域では取得しない。既存のレイヤーは取得済みエリアに貼り付いたまま追従する。
+      if (grid) setStatus('ズーム13以上で、表示範囲の地形を取得します（現在の表示は取得済みエリアのみ）。');
+      return;
+    }
+    captureTerrain().catch(e => {
+      capturing = false;    // 失敗したまま取得中の印を残すと、以後の自動取得が止まる
+      setStatus('地形の自動取得に失敗しました: ' + e.message, true);
+    });
+  }, CAPTURE_DELAY_MS);
+}
+map.on('moveend', scheduleCapture);
 // 保存された設定がある場合、初期取得はスクリプト末尾の bootRestore() に任せる。
 // 既定の表示位置で取得してしまうと、復元後にもう一度取り直すことになるため。
 if (!lsGet('floodSim.settings.v1') && map.getZoom() >= 13) map.fire('moveend');   // 初期表示エリアも自動取得する
@@ -6300,11 +6393,24 @@ function drawFlowArrows(){
   arrow(fctx, pt.x + ux*30, pt.y + uy*30, -ux, -uy, 15, 3.5, 'rgba(198,40,40,.92)');
 }
 
+/* ズームアニメ中はタイルだけが拡大され、画面座標のこのキャンバスは追随できない。
+   そのまま残すと矢印が地形からずれて見えるので、アニメの間は消して zoomend で描き直す。
+   このとき move も毎フレーム飛ぶが、追随できない絵を描き直すのは無駄な上に
+   拡大縮小のコマ落ちの元なので、アニメ中は描画そのものを止める。 */
+let zoomAnimating = false;
+let flowRaf = 0;
+// アニメ無しの連続ズームでは move が1ホイールイベントごとに飛ぶ。1フレーム1回にまとめる。
+const redrawFlowArrows = () => {
+  if (zoomAnimating || flowRaf) return;
+  flowRaf = requestAnimationFrame(() => { flowRaf = 0; if (!zoomAnimating) drawFlowArrows(); });
+};
 $('showFlowDir').addEventListener('change', drawFlowArrows);
-map.on('move moveend zoomend resize viewreset', drawFlowArrows);
-// ズームアニメ中はタイルだけが拡大され、画面座標のこのキャンバスは追随できない。
-// そのまま残すと矢印が地形からずれて見えるので、アニメの間は消して zoomend で描き直す。
-map.on('zoomstart', () => fctx.clearRect(0, 0, flowCanvas.width, flowCanvas.height));
+map.on('move moveend resize viewreset', redrawFlowArrows);
+map.on('zoomstart', () => {
+  zoomAnimating = true;
+  fctx.clearRect(0, 0, flowCanvas.width, flowCanvas.height);
+});
+map.on('zoomend', () => { zoomAnimating = false; drawFlowArrows(); });
 
 
 /* ================= 車の退避先の候補 =================
@@ -6791,8 +6897,8 @@ $('panel').addEventListener('change', saveSettingsSoon);
 $('panel').addEventListener('input',  saveSettingsSoon);
 map.on('moveend', saveSettingsSoon);
 
-// 保存が無い場合の初期取得は上の moveend 発火が済ませており、その時点で capturing が
-// 立っているので、ここでの二度目の発火は captureTerrain 側で弾かれる。
+// 保存が無い場合の初期取得は上の moveend 発火が済ませているが、取得は少し待ってから
+// 走るので、ここでの二度目の発火とまとめて1回になる(scheduleCapture の待ち時間)。
 bootRestore();
 </script>
 </body>
