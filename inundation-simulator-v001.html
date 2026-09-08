@@ -853,6 +853,66 @@ svg.leaflet-image-layer.leaflet-interactive path {
   .ev-ok {color:#1b7f3b;font-weight:600}
   .ev-bad{color:var(--danger);font-weight:600}
 
+  /* ================= 歩行モード（現在地の追従） =================
+     窪地を避けて歩くための表示。地図は北固定のまま、向きは現在地の扇だけで示す。
+     地図ごと回すと、重ね地図・ピン・凡例のすべてを回す作りが要るうえ、
+     周りとの高低差を読むときは北が固定されているほうが位置関係を追いやすい。 */
+  .geo-mark{position:relative}
+  .geo-dot{position:absolute;left:-9px;top:-9px;width:18px;height:18px;border-radius:50%;
+    background:#1a73e8;border:3px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.5)}
+  /* 向きの扇。真北が0度で、時計回りに回す(conic-gradientの0度は上向き) */
+  .geo-fan{position:absolute;left:-32px;top:-32px;width:64px;height:64px;border-radius:50%;
+    opacity:0;transition:opacity .25s;
+    background:conic-gradient(from -27deg, rgba(26,115,232,.66) 0deg,
+      rgba(26,115,232,.24) 38deg, rgba(26,115,232,0) 54deg, rgba(26,115,232,0) 360deg);
+    -webkit-mask:radial-gradient(circle at 50% 50%, #000 0 22%, rgba(0,0,0,.85) 55%, transparent 78%);
+            mask:radial-gradient(circle at 50% 50%, #000 0 22%, rgba(0,0,0,.85) 55%, transparent 78%)}
+  .geo-fan.on{opacity:1}
+  /* 精度の円。GPSの誤差が大きいときに「この中のどこか」を隠さず見せる */
+  .geo-acc{stroke:#1a73e8;stroke-opacity:.5;stroke-width:1;fill:#1a73e8;fill-opacity:.12}
+
+  /* 現在地ボタン。地図の右下、地図クレジットの上に置く。
+     スマホでは操作パネルが下(横向きは右)に重なるので、その実寸ぶんだけ内側へ寄せる。 */
+  /* --panel-vis-* は「重なったパネルに隠れている幅・高さ」で、スマホ幅でのみ意味を持つ
+     （広い画面ではパネルは地図に重ならないので、ここでは使わない）。 */
+  #walkBtn{position:absolute;z-index:830;right:10px;bottom:26px;
+    width:46px;height:46px;padding:0;border-radius:50%;
+    border:1px solid var(--border);background:rgba(255,255,255,.96);color:#5b6b7a;
+    box-shadow:0 2px 8px rgba(0,0,0,.28);cursor:pointer;
+    display:flex;align-items:center;justify-content:center}
+  #walkBtn svg{width:24px;height:24px;display:block}
+  #walkBtn.located{color:#1a73e8}
+  #walkBtn.following{background:#1a73e8;color:#fff;border-color:#1a73e8}
+  /* 位置を待っている間は、押した手応えが出るように点滅させる */
+  #walkBtn.waiting{animation:walkWait 1.1s ease-in-out infinite}
+  @keyframes walkWait{50%{opacity:.45}}
+  #mapwrap.placing #walkBtn{display:none}   /* 地点追加中は地図をタップさせる */
+
+  /* 歩行中の読み取り。歩きながら一目で見る値なので、地図の上端中央に大きく出す。 */
+  #walkHud{position:absolute;left:50%;transform:translateX(-50%);top:10px;z-index:910;
+    width:max-content;max-width:calc(100% - 20px);
+    background:rgba(20,30,40,.9);color:#fff;border-radius:10px;padding:8px 13px;
+    box-shadow:0 3px 14px rgba(0,0,0,.3);line-height:1.35;text-align:center;pointer-events:none}
+  #walkHud[hidden]{display:none}
+  #mapwrap.placing #walkHud{display:none}
+  /* 歩行中は上端中央にこの表示が出るので、観測時刻のスタンプはその下へ避ける
+     (狭い画面では両方が同じ高さに並ぶと重なる)。高さはJSが実寸を変数で配る。 */
+  #mapwrap.walking #mapStamps{top:calc(var(--walk-hud-h, 0px) + 14px)}
+  .wh-main{font-size:17px;font-weight:700;font-variant-numeric:tabular-nums}
+  .wh-main.low {color:#ff9c6e}    /* 周りより低い＝窪地側。暗い背景で読める暖色にする */
+  .wh-main.deep{color:#ff6b6b}
+  .wh-main.high{color:#8ce6a8}
+  .wh-sub{font-size:11px;opacity:.85;font-variant-numeric:tabular-nums;margin-top:2px}
+  .wh-depth{font-size:13px;font-weight:600;margin-top:3px;color:#7fd3ff}
+  .wh-warn{font-size:11px;margin-top:3px;color:#ffd479}
+  @media (max-width:700px){
+    #walkBtn{width:52px;height:52px;bottom:calc(var(--panel-vis-y, 0px) + 26px);
+      right:calc(var(--panel-vis-x, 0px) + 10px)}
+    #walkBtn svg{width:26px;height:26px}
+    #walkHud{top:6px;padding:7px 11px}
+    .wh-main{font-size:16px}
+  }
+
   #legend{position:absolute;left:10px;bottom:24px;z-index:800;background:rgba(255,255,255,.92);
     border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:11px;display:none}
   #legend h3{margin:0 0 6px;font-size:11px}
@@ -1031,6 +1091,18 @@ svg.leaflet-image-layer.leaflet-interactive path {
       </div>
     </div>
     <div id="probe"></div>
+    <!-- 歩行モード: 現在地ボタンと、歩きながら読む1枚の表示。
+         どちらも地図の上に置き、パネルを畳んでいても操作・確認できるようにする。 -->
+    <button id="walkBtn" type="button" title="現在地を追いかける" aria-label="現在地を追いかける"
+            aria-pressed="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="4"></circle>
+        <path d="M12 1.5v3.2M12 19.3v3.2M1.5 12h3.2M19.3 12h3.2"></path>
+        <circle cx="12" cy="12" r="8.4" stroke-opacity=".45"></circle>
+      </svg>
+    </button>
+    <div id="walkHud" hidden></div>
     <!-- 地点の追加は、パネルではなく地図の上で完結させる。中心合わせを無くすためと、
          スマホでは地図の中心が操作パネルの裏に隠れて狙えないため。 -->
     <div id="placeHintBar">
@@ -1098,6 +1170,32 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <button id="btnPlaceDel">選択中の地点を削除</button>
       </div>
       <div id="evacResult"></div>
+    </div>
+
+    <div class="sec" id="secWalk">
+      <h2>歩きながら（現在地）</h2>
+      <div class="btnrow">
+        <button id="btnWalk" class="primary">現在地を追いかける</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label for="walkRadius">まわりと比べる範囲</label>
+        <select id="walkRadius">
+          <option value="25">半径25 m</option>
+          <option value="50" selected>半径50 m</option>
+          <option value="100">半径100 m</option>
+        </select>
+      </div>
+      <p class="hint">現在地を地図の中心に置いたまま歩けます。地図は<b>北が上のまま</b>で、
+        端末の向きは現在地の扇で示します。地図の上端には、いま立っている場所の
+        <b>標高</b>と<b>まわりより何m低い（高い）か</b>を出します。水は低いところへ集まるので、
+        <b>「まわりより低い」と出た場所は避けて歩いてください</b>。予測を実行してあれば、
+        現在地の<b>予測浸水深</b>も一緒に出ます。<br>
+        地図を指で動かすと追従だけ止まります（現在地の印は残ります）。もう一度ボタンを押すと
+        また追いかけます。追従中は<b>標高データだけ</b>を自動で取り直し（現在地が取得済みエリアの
+        端に近づいたときだけ）、重い浸水予測は自動では走らせません。歩きながら計算し直したいときは
+        「予測を実行」を押してください。<br>
+        <b>現在地の取得にはHTTPSが必要です。</b>向きの表示は端末のコンパスによります。
+        取得した位置は地図に表示するだけで、外部へは送信されません。</p>
     </div>
 
     <div class="sec" id="secRainMotion">
@@ -3473,6 +3571,7 @@ async function captureTerrain(){
   const wetDisplay3D = new Uint8Array(nCells);
   infilRate.fill(surface.infilMmH / 1000 / 3600);
   manningN.fill(surface.manningN);
+  keepFloodSnapshot();   // 作り直す前に、歩行モードで読む用の予測結果を控えておく
   grid = {cols, rows, elev,
           volume:new Float64Array(nCells),          // 計算の正本: 地表水量 [m3]
           water:new Float32Array(nCells),           // 表示互換用: 水深 [m] = volume / cellArea
@@ -3531,6 +3630,7 @@ async function captureTerrain(){
   computeViz();   // 微地形レイヤーを再生成(内部でrenderWaterも呼ぶ)
   drawFlowArrows();
   updateStats();
+  updateWalkHud();   // 新しい地形で、足元の高低差を出し直す
   capturing = false;
   if (captureAgain) scheduleCapture();   // 取得中に動かされていた分をここで拾う
 }
@@ -3555,7 +3655,336 @@ function scheduleCapture(){
     });
   }, CAPTURE_DELAY_MS);
 }
-map.on('moveend', scheduleCapture);
+/* ================= 歩行モード（現在地の追従と、足元の高低差） =================
+   使う場面は、雨のあと・雨のさなかに実際に外を歩くとき。「この先が周りより低い」が
+   その場で分かれば、冠水しやすい窪地を踏まずに回り込める。
+
+   地図は北を上に固定したままにしてある。地図ごと回すと重ね地図・ピン・凡例のすべてを
+   回す作りが要るのに加え、周りとの高低差を読むときは方角が動かないほうが位置関係を追える。
+   端末の向きは現在地の扇だけで示す。
+
+   状態は3つ:
+     off       … GPSを使っていない
+     located   … 位置は取り続けるが、地図は追わない(手で地図を動かしたあと)
+     following … 位置を取り、地図を現在地に合わせ続ける
+   Googleマップと同じく、地図を指で動かしたら追従だけをやめ、現在地の印は残す。 */
+
+const WALK_ZOOM = 17;             // 追従を始めるときの最低ズーム(徒歩の間隔で見える大きさ)
+const WALK_EDGE_MARGIN = 0.22;    // 現在地が取得済みエリアのこの割合より端に来たら地形を取り直す
+const WALK_JUMP_PX = 220;         // これ以上離れたらアニメーションせずに飛ばす
+const WALK_MOVING_MS = 0.6;       // これ以上の速さで動いていれば、進行方向をGPSの向きから取る
+
+let walkState = 'off';
+let walkWatchId = 0;
+let walkFix = null;               // {lat,lng,acc,heading,speed,at}
+let walkMarker = null, walkAcc = null;
+let walkCompass = null;           // 端末コンパスの向き[度・真北基準]
+let walkOrientBound = false;
+let walkWake = null;              // 画面が消えないようにする(取れない端末では null のまま)
+let floodSnap = null;             // 地形を取り直す前の浸水予測 {px,cols,rows,water,at}
+let floodRunAt = 0;               // その予測を計算した時刻
+
+/* 地形を取り直すと grid ごと作り直され、計算済みの浸水深は消える。
+   歩いている間も「さっき出した予測」を現在地で読めるよう、消える直前に控えを取る。 */
+function keepFloodSnapshot(){
+  if (!grid || !(lastMaxDepth > 0)) return;
+  floodSnap = {px:{x0:grid.px.x0, x1:grid.px.x1, y0:grid.px.y0, y1:grid.px.y1},
+               cols:grid.cols, rows:grid.rows,
+               water:grid.water.slice(), at:floodRunAt || Date.now()};
+}
+
+/* 現在地の予測浸水深。いまのグリッドに計算結果があればそれを、無ければ控えから読む。 */
+function floodDepthAt(lat, lng){
+  if (grid && lastMaxDepth > 0){
+    const i = cellIndexAt(lat, lng);
+    if (i >= 0) return {depth:grid.water[i], at:floodRunAt || Date.now()};
+  }
+  const s = floodSnap;
+  if (!s) return null;
+  const fx = (lngToX(lng, DEM_Z) - s.px.x0) / (s.px.x1 - s.px.x0);
+  const fy = (latToY(lat, DEM_Z) - s.px.y0) / (s.px.y1 - s.px.y0);
+  if (fx < 0 || fx >= 1 || fy < 0 || fy >= 1) return null;
+  const c = Math.min(s.cols - 1, Math.floor(fx * s.cols));
+  const r = Math.min(s.rows - 1, Math.floor(fy * s.rows));
+  return {depth:s.water[r * s.cols + c], at:s.at};
+}
+
+/* 周りとの高低差。半径Rの輪(0.7R〜R)の標高の中央値と、足元の標高を比べる。
+   平均ではなく中央値なのは、輪に川や崖が1本かかっただけで値が引きずられないようにするため。
+   戻り値の drop は「周りより何m低いか」(正なら窪地側)。 */
+function reliefAt(lat, lng, radiusM){
+  if (!grid) return null;
+  const i = cellIndexAt(lat, lng);
+  if (i < 0) return null;
+  const {cols, rows, elev, cellM} = grid;
+  const c0 = i % cols, r0 = (i / cols) | 0;
+  const R = Math.max(2, Math.round(radiusM / cellM));
+  const inner = R * 0.7;
+  const vals = [];
+  let outside = 0, total = 0;
+  for (let dr = -R; dr <= R; dr++){
+    for (let dc = -R; dc <= R; dc++){
+      const d = Math.sqrt(dr*dr + dc*dc);
+      if (d < inner || d > R) continue;
+      total++;
+      const r = r0 + dr, c = c0 + dc;
+      if (r < 0 || r >= rows || c < 0 || c >= cols){ outside++; continue; }
+      vals.push(elev[r * cols + c]);
+    }
+  }
+  // 輪の半分以上が取得エリアの外なら、周りと比べたことにはならない
+  if (!vals.length || outside > total * 0.5) return null;
+  vals.sort((a, b) => a - b);
+  const ring = vals[vals.length >> 1];
+  return {elev:elev[i], ring, drop:ring - elev[i], partial:outside > 0};
+}
+
+/* 進行方向。歩いている間はGPSの進行方位のほうが安定するので、動いていればそちらを優先する。 */
+function walkHeading(){
+  if (walkFix && Number.isFinite(walkFix.heading) &&
+      Number.isFinite(walkFix.speed) && walkFix.speed >= WALK_MOVING_MS) return walkFix.heading;
+  return walkCompass;
+}
+
+function drawWalkMarker(){
+  if (!walkFix) return;
+  const ll = L.latLng(walkFix.lat, walkFix.lng);
+  if (!walkMarker){
+    walkMarker = L.marker(ll, {
+      icon: L.divIcon({className:'',
+        html:'<div class="geo-mark"><div class="geo-fan"></div><div class="geo-dot"></div></div>',
+        iconSize:[0, 0]}),
+      interactive:false, keyboard:false, zIndexOffset:1000
+    }).addTo(map);
+    walkAcc = L.circle(ll, {radius:walkFix.acc || 0, className:'geo-acc',
+                            interactive:false, weight:1}).addTo(map);
+  } else {
+    walkMarker.setLatLng(ll);
+    walkAcc.setLatLng(ll).setRadius(walkFix.acc || 0);
+  }
+  const el = walkMarker.getElement();
+  const fan = el && el.querySelector('.geo-fan');
+  if (fan){
+    const h = walkHeading();
+    if (Number.isFinite(h)){
+      fan.style.transform = 'rotate(' + h.toFixed(0) + 'deg)';
+      fan.classList.add('on');
+    } else fan.classList.remove('on');
+  }
+}
+
+function clearWalkMarker(){
+  if (walkMarker){ map.removeLayer(walkMarker); walkMarker = null; }
+  if (walkAcc){ map.removeLayer(walkAcc); walkAcc = null; }
+}
+
+/* 歩きながら見る1枚。並べる順番は歩く判断に効く順:
+   周りとの高低差 → 標高とGPSの誤差 → 予測浸水深。 */
+function updateWalkHud(){
+  const hud = $('walkHud'), mw = $('mapwrap');
+  mw.classList.toggle('walking', walkState !== 'off');
+  if (walkState === 'off'){ hud.hidden = true; hud.innerHTML = ''; return; }
+  hud.hidden = false;
+  if (!walkFix){
+    hud.innerHTML = '<div class="wh-main">現在地を測っています…</div>';
+    mw.style.setProperty('--walk-hud-h', hud.offsetHeight + 'px');
+    return;
+  }
+  const radiusM = +$('walkRadius').value || 50;
+  const rel = reliefAt(walkFix.lat, walkFix.lng, radiusM);
+  let main, cls = '';
+  if (!rel){
+    main = grid ? '標高データの外に出ました' : '標高データがまだありません';
+  } else {
+    const d = rel.drop;
+    if (d >= 1.0)      { main = 'まわりより ' + d.toFixed(1) + ' m 低い'; cls = 'deep'; }
+    else if (d >= 0.3) { main = 'まわりより ' + d.toFixed(1) + ' m 低い'; cls = 'low'; }
+    else if (d > -0.3) { main = 'まわりと同じ高さ'; }
+    else               { main = 'まわりより ' + (-d).toFixed(1) + ' m 高い'; cls = 'high'; }
+  }
+  let html = '<div class="wh-main ' + cls + '">' + main + '</div>';
+
+  const acc = walkFix.acc;
+  const sub = [];
+  if (rel) sub.push('標高 ' + rel.elev.toFixed(1) + ' m');
+  sub.push('半径' + radiusM + 'm と比較');
+  if (Number.isFinite(acc)) sub.push('GPS ±' + Math.round(acc) + ' m');
+  html += '<div class="wh-sub">' + sub.join(' ／ ') + '</div>';
+
+  const f = floodDepthAt(walkFix.lat, walkFix.lng);
+  if (f && f.depth >= 0.01){
+    const min = Math.max(0, Math.round((Date.now() - f.at) / 60000));
+    const lv = GROUND_LEVELS.find(l => f.depth >= l.min);
+    html += '<div class="wh-depth">予測浸水深 ' + fmtDepth(f.depth) +
+      '（' + escapeHtml(lv.label) + '・' + min + '分前の予測）</div>';
+  }
+  if (Number.isFinite(acc) && acc > 30)
+    html += '<div class="wh-warn">GPSの精度が粗いので、窪地の判定は目安です</div>';
+  else if (rel && rel.partial)
+    html += '<div class="wh-warn">まわりの一部は標高データの外です</div>';
+
+  hud.innerHTML = html;
+  // 観測時刻のスタンプを、この表示の下へ逃がすための実寸
+  mw.style.setProperty('--walk-hud-h', hud.offsetHeight + 'px');
+}
+
+function updateWalkUi(){
+  const btn = $('walkBtn'), pbtn = $('btnWalk');
+  btn.classList.toggle('following', walkState === 'following');
+  btn.classList.toggle('located',   walkState === 'located');
+  btn.classList.toggle('waiting',   walkState !== 'off' && !walkFix);
+  btn.setAttribute('aria-pressed', walkState === 'following' ? 'true' : 'false');
+  btn.title = walkState === 'following' ? '追従を止める' : '現在地を追いかける';
+  btn.setAttribute('aria-label', btn.title);
+  pbtn.textContent = walkState === 'following' ? '追従を止める'
+                   : walkState === 'located'   ? 'もう一度追いかける'
+                   : '現在地を追いかける';
+  pbtn.classList.toggle('primary', walkState !== 'following');
+  updateWalkHud();
+}
+
+/* 追従中の地図寄せ。数pxのぶれで毎回動かすと地図が細かく揺れるので、離れたときだけ動かす。 */
+function walkRecenter(force){
+  if (!walkFix) return;
+  const ll = L.latLng(walkFix.lat, walkFix.lng);
+  if (force){
+    map.setView(ll, Math.max(map.getZoom(), WALK_ZOOM), {animate:false});
+    return;
+  }
+  // ズームのアニメーション中に寄せると、行き先の倍率を今の倍率で上書きして
+  // 拡大そのものを取り消してしまう。終わってから zoomend で寄せ直す。
+  if (map._animatingZoom) return;
+  const d = map.latLngToContainerPoint(ll).distanceTo(map.latLngToContainerPoint(map.getCenter()));
+  if (d < 6) return;
+  if (d > WALK_JUMP_PX) map.setView(ll, map.getZoom(), {animate:false});
+  else map.panTo(ll, {animate:true, duration:0.4, easeLinearity:0.5});
+}
+
+function onWalkFix(pos){
+  const c = pos.coords;
+  const first = !walkFix;
+  walkFix = {lat:c.latitude, lng:c.longitude, acc:c.accuracy,
+             heading:c.heading, speed:c.speed, at:pos.timestamp || Date.now()};
+  drawWalkMarker();
+  if (walkState === 'following') walkRecenter(first);
+  if (first){
+    updateWalkUi();
+    setStatus('現在地を追いかけています。地図を指で動かすと追従だけ止まります。');
+  } else updateWalkHud();
+}
+
+function onWalkErr(err){
+  const msg = err.code === 1 ? '位置情報の利用が許可されていません。ブラウザの設定で許可してください。'
+            : err.code === 3 ? '現在地の取得に時間がかかっています（空の見える場所でお試しください）。'
+            : '現在地を取得できませんでした（HTTPSまたはlocalhostが必要です）: ' + err.message;
+  setStatus(msg, true);
+  // 時間切れは電波状況の問題で、次の更新で復帰することがある。追従はやめずに知らせるだけにする。
+  if (err.code !== 3) walkStop();
+}
+
+/* iOSはコンパスの利用に、利用者の操作から始まる許可要求が要る。ボタンを押した流れの中で呼ぶ。 */
+async function askOrientation(){
+  const DOE = window.DeviceOrientationEvent;
+  if (!DOE) return;
+  try {
+    if (typeof DOE.requestPermission === 'function'){
+      const res = await DOE.requestPermission();
+      if (res !== 'granted') return;
+    }
+  } catch(e){ return; }   // 許可が下りなくても、位置の表示そのものは続ける
+  if (walkOrientBound) return;
+  walkOrientBound = true;
+  const handler = ev => {
+    let h = null;
+    if (typeof ev.webkitCompassHeading === 'number') h = ev.webkitCompassHeading;
+    else if (ev.absolute && typeof ev.alpha === 'number') h = 360 - ev.alpha;
+    if (h === null || !Number.isFinite(h)) return;
+    // 画面を横向きにした分だけ、端末の向きと画面の向きがずれる
+    const scr = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+    walkCompass = (h + scr + 360) % 360;
+    if (walkState !== 'off') drawWalkMarker();
+  };
+  window.addEventListener('deviceorientationabsolute', handler);
+  window.addEventListener('deviceorientation', handler);
+}
+
+/* 歩いている間に画面が消えると、次に見るたびに測り直しになる。取れる端末では消灯を止める。 */
+async function keepAwake(on){
+  try {
+    if (on){
+      if (!walkWake && navigator.wakeLock) walkWake = await navigator.wakeLock.request('screen');
+    } else if (walkWake){ await walkWake.release(); walkWake = null; }
+  } catch(e){ walkWake = null; }   // 取れない端末では諦める(機能そのものは動く)
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && walkState !== 'off') keepAwake(true);
+});
+
+function walkStart(){
+  if (!navigator.geolocation){ setStatus('この端末では現在地を取得できません。', true); return; }
+  if (walkWatchId) navigator.geolocation.clearWatch(walkWatchId);
+  walkState = 'following';
+  updateWalkUi();
+  askOrientation();
+  keepAwake(true);
+  setStatus('現在地を取得しています…');
+  walkWatchId = navigator.geolocation.watchPosition(onWalkFix, onWalkErr,
+    {enableHighAccuracy:true, timeout:20000, maximumAge:2000});
+  if (walkFix) walkRecenter(true);
+}
+
+function walkStop(){
+  if (walkWatchId){ navigator.geolocation.clearWatch(walkWatchId); walkWatchId = 0; }
+  walkState = 'off';
+  walkFix = null;
+  clearWalkMarker();
+  keepAwake(false);
+  updateWalkUi();
+}
+
+/* 手で地図を動かしたときと、地図の上で地点を置くとき。
+   位置は取り続け、地図を追わせるのだけをやめる（動く地図はタップで狙えない）。 */
+function walkPause(msg){
+  if (walkState !== 'following') return;
+  walkState = 'located';
+  updateWalkUi();
+  setStatus(msg || '追従を止めました。現在地ボタンでまた追いかけます。');
+}
+
+$('walkBtn').addEventListener('click', () => {
+  if (walkState === 'following') walkStop();
+  else if (walkState === 'located'){ walkState = 'following'; updateWalkUi(); walkRecenter(true); }
+  else walkStart();
+});
+$('btnWalk').addEventListener('click', () => $('walkBtn').click());
+$('walkRadius').addEventListener('change', updateWalkHud);
+map.on('dragstart', () => walkPause());
+// 追従中に倍率を変えたら、その倍率のまま現在地へ寄せ直す(追従はやめない)
+map.on('zoomend', () => { if (walkState === 'following') walkRecenter(false); });
+
+/* 追従中は1〜2秒ごとに地図が動く。そのたびに標高タイルを取りに行くと通信もグリッド再構築も
+   止まらないので、現在地が取得済みエリアの端に近づいたときだけ取り直す。
+   ズームを変えて表示範囲が取得済みを超えたときも、同じく取り直す。 */
+function walkNeedsCapture(){
+  if (!grid || !walkFix) return true;
+  // ズームを変えたときは、表示に合う細かさで取り直す。追従中の平行移動では
+  // 表示範囲は必ず取得済みからはみ出すので、「はみ出したか」では判定できない。
+  const gs = grid.bounds.getNorth() - grid.bounds.getSouth();
+  const vs = map.getBounds().getNorth() - map.getBounds().getSouth();
+  if (vs > gs * 1.05 || vs < gs * 0.95) return true;
+  const {x0, x1, y0, y1} = grid.px;
+  const fx = (lngToX(walkFix.lng, DEM_Z) - x0) / (x1 - x0);
+  const fy = (latToY(walkFix.lat, DEM_Z) - y0) / (y1 - y0);
+  const m = WALK_EDGE_MARGIN;
+  return !(fx > m && fx < 1 - m && fy > m && fy < 1 - m);
+}
+
+/* 追従で地図が動いた分は、現在地が取得済みエリアの端に寄るまで取り直さない。
+   手で動かしたとき(追従なし)は、これまでどおり動きが止まるたびに取り直す。 */
+map.on('moveend', () => {
+  if (walkState === 'following' && !walkNeedsCapture()) return;
+  scheduleCapture();
+});
 // 保存された設定がある場合、初期取得はスクリプト末尾の bootRestore() に任せる。
 // 既定の表示位置で取得してしまうと、復元後にもう一度取り直すことになるため。
 if (!lsGet('floodSim.settings.v1') && map.getZoom() >= 13) map.fire('moveend');   // 初期表示エリアも自動取得する
@@ -5450,12 +5879,14 @@ function updateStats(){
     if (water[i] >= 0.1) cnt++;
   }
   lastMaxDepth = mx;
+  if (mx > 0) floodRunAt = Date.now();   // 歩行モードで「◯分前の予測」を出すのに使う
   $('stTime').textContent = fmtTime(simTime);
   $('stMax').textContent = mx > 0 ? fmtDepth(mx) : 'なし';
   const areaKm2 = cnt * cellM * cellM / 1e6;
   $('stArea').textContent = areaKm2 >= 0.01 ? areaKm2.toFixed(2) + ' km²' : (cnt*cellM*cellM).toFixed(0)+' m²';
   updateWaterBalance();
   updatePlaceVerdict();   // 全体の統計と同時に、選択中の地点の判定も更新する
+  if (walkState !== 'off') updateWalkHud();
 }
 
 function fmtVolume(v){
@@ -5683,6 +6114,7 @@ function startPlacing(){
   $('placeHintBar').classList.add('on');
   $('placeForm').classList.remove('on');
   $('probe').style.display = 'none';
+  walkPause('地点を置く間は追従を止めます。');   // 追従で動く地図の上ではタップで狙えない
   setStatus('地図をタップして、地点の位置を選んでください。');
 }
 
@@ -7333,7 +7765,8 @@ const SETTING_IDS = ['baseMap','rrim','rrimOp','radarShow','radarOp',
   'hzFlood','hzHightide','hzKaoku','hzKeizoku','hzOp','riskFlood','showFlowDir',
   // pfFloor は「次に登録する地点の既定値」なので設定として持つ。
   // placeFloor は選択中の地点の属性なので、地点側(floorCm)にだけ持たせる。
-  'pfFloor'];
+  'pfFloor',
+  'walkRadius'];
 
 let settingsTimer = 0;
 function saveSettings(){
