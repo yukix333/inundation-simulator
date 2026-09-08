@@ -1000,6 +1000,14 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <div class="lg"><i style="background:#FF2800"></i>50〜80</div>
         <div class="lg"><i style="background:#B40068"></i>80以上</div>
       </div>
+      <div id="riskLegend" style="display:none">
+        <h3 id="riskLegendTitle">洪水キキクル（川の危険度）</h3>
+        <div class="lg"><i style="background:#0c000c"></i>災害切迫（レベル5相当）</div>
+        <div class="lg"><i style="background:#aa00aa"></i>危険（レベル4相当）</div>
+        <div class="lg"><i style="background:#ff2800"></i>警戒（レベル3相当）</div>
+        <div class="lg"><i style="background:#f2e700"></i>注意（レベル2相当）</div>
+        <div class="lg"><i style="background:#dddddd"></i>欠測・非表示区間（水害リスクライン）</div>
+      </div>
       </div>
     </div>
     <!-- 雨雲がいつの観測かは、凡例を開かないと分からないと困る(スマホでは既定で畳んである)。
@@ -1014,6 +1022,12 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <div id="satStamp" class="map-stamp" hidden>
         <b id="satStampTime">—</b>
         <span id="satStampAge" class="stamp-age"></span>
+      </div>
+      <!-- キキクルは10分ごとに更新される。いつの危険度を見ているかは避難の判断に直結するので、
+           雨雲・雲画像と同じように地図の上へ常に出しておく。 -->
+      <div id="riskStamp" class="map-stamp" hidden>
+        <b id="riskStampTime">—</b>
+        <span id="riskStampAge" class="stamp-age"></span>
       </div>
     </div>
     <div id="probe"></div>
@@ -1104,6 +1118,8 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <h2>外水（河川・高潮）の想定区域</h2>
       <p class="hint">このシミュレーターが計算しているのは内水氾濫だけです。前日〜数時間前の備えでは
         河川の氾濫と高潮のほうが本命のリスクになるので、公式の想定区域を必ず重ねて確認してください。</p>
+      <p class="hint">ここで分かるのは「いつか氾濫したら」の想定です。<b>いま川が危ないかどうか</b>は、
+        「表示」タブの<b>洪水キキクル</b>（気象庁・10分ごとの実況）を重ねて確かめてください。</p>
       <div id="hazardVerdict"></div>
       <div class="check"><input type="checkbox" id="hzFlood"><label for="hzFlood">洪水浸水想定区域（想定最大規模）</label></div>
       <div class="check"><input type="checkbox" id="hzHightide"><label for="hzHightide">高潮浸水想定区域（想定最大規模）</label></div>
@@ -1144,6 +1160,30 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <input type="checkbox" id="radarShow">
         <label for="radarShow">雨雲レーダーを重ねる（気象庁・直近15分の動きをくり返し表示）</label>
       </div>
+      <!-- キキクルも実況(10分ごとの更新)なので、雨雲レーダーと並べて置く。
+           雨がどこに降っているかと、その雨で川がどうなっているかは続けて見るため。 -->
+      <div class="check" style="margin-top:8px">
+        <input type="checkbox" id="riskFlood">
+        <label for="riskFlood">洪水キキクルを重ねる（気象庁・いまの河川の危険度）</label>
+      </div>
+      <div id="riskStatus" class="hint"></div>
+      <p class="hint">3時間先までの予測を含めた危険度が、川ごとに4段階で色分けされます（凡例参照）。
+        <b>危険度が上がっている川だけ</b>が出るので、平常時は何も表示されません。逃げるかどうかの
+        タイミングは、この色と自治体の避難情報で決めてください。ハザードマップの想定区域が
+        「いつか氾濫したら」の地図なのに対して、こちらは「いま危ないか」の地図です。</p>
+      <details class="adv">
+        <summary>洪水キキクルの見かた</summary>
+        <p class="hint">線が出ていない川は、危険度が上がっていないか、キキクルが判定していない
+          小さな川です。中小河川は色が付いていなくても急に増水します。<br>
+          国が管理する大きな川（庄内川・荒川など）は、気象庁が中小河川とは別のデータで配信して
+          いるので、縮尺によって出どころが変わります。<b>ズーム11以上</b>では「水害リスクライン」——
+          <b>左岸・右岸それぞれ</b>の危険度を川の両脇に沿う2本の線で示します（灰色は欠測・非表示区間）。
+          <b>それより引いたとき</b>は「指定河川洪水予報」の危険度を川に沿った1本の線で示します。
+          どちらも同じ色の段階なので、<b>どこまで引いても大きな川の危険度は消えません</b>。<br>
+          1本の線として見えない短い区間は、点に置き換えて残しています
+          （点は位置を指すだけで、区間の長さは表していません）。<br>
+          出典: <a href="https://www.jma.go.jp/bosai/risk/#elements:flood" target="_blank" rel="noopener">気象庁「キキクル（危険度分布）」</a></p>
+      </details>
       <div class="check" style="margin-top:8px">
         <input type="checkbox" id="satShow">
         <label for="satShow">衛星の雲画像を重ねる（気象庁ひまわり・直近3時間の動きをくり返し表示）</label>
@@ -3845,18 +3885,24 @@ for (const h2 of document.querySelectorAll('#panelBody .sec > h2')){
 function updateLegend(){
   const showRain = !!radarLayer;
   const showDepth = !!grid;
+  // キキクルはタイルを読み終える前から凡例を出す(色の意味が分からないまま待たせない)
+  const showRisk = $('riskFlood').checked;
   $('rainLegend').style.display = showRain ? '' : 'none';
   $('depthLegend').style.display = showDepth ? '' : 'none';
+  $('riskLegend').style.display = showRisk ? '' : 'none';
   $('rainLegendTitle').style.marginTop = showDepth ? '8px' : '0';
-  $('legend').style.display = (showRain || showDepth) ? 'block' : 'none';
+  $('riskLegendTitle').style.marginTop = (showDepth || showRain) ? '8px' : '0';
+  $('legend').style.display = (showRain || showDepth || showRisk) ? 'block' : 'none';
 }
 
 /* パラパラ表示は各コマとも地図に載せたまま、濃さの出し入れだけで切り替える。
    毎回タイルを取り直さないので、2周目からは通信なしで滑らかに繰り返せる。 */
 
-/* 重ねものの上下関係。衛星の雲画像はハザードや赤色立体地図の上、雨雲レーダーの下に置く。
-   いま降っている雨をいちばん手前に残すため。 */
+/* 重ねものの上下関係。ハザードや赤色立体地図の上にキキクル、その上に衛星の雲画像、
+   いちばん手前に雨雲レーダーを置く。いま降っている雨を最前面に残しつつ、
+   川の危険度が想定区域の塗りに埋もれないようにするため。 */
 function bringWeatherLayersToFront(){
+  if (riskLayer) riskLayer.bringToFront();
   for (const l of satLayers) l.bringToFront();
   for (const l of radarLayers) l.bringToFront();
 }
@@ -3961,6 +4007,27 @@ function startRadarWatch(){
       } catch (e){}   // 取れなければ今の絵のまま。「◯分前」が育つので古さは伝わる
     }
 
+    // キキクルは10分ごとの更新。新しい判定が出ていたらタイルだけ描き直す
+    if ($('riskFlood').checked){
+      updateRiskStamp();
+      if (Date.now() - riskPolledAt >= RISK_POLL_MS){
+        riskPolledAt = Date.now();
+        const riskReq = riskReqId;
+        try {
+          const rt = await fetchRiskTime();
+          if (riskReq === riskReqId && $('riskFlood').checked && riskLayer
+              && riskTime && rt.validtime !== riskTime.validtime){
+            riskTime = rt;
+            riskTileCache.clear();
+            riskRiverCache.clear();
+            riskHighMarks = []; riskHighSeen.clear();
+            riskLayer.redraw();
+            updateRiskStamp(); updateRiskStatus();
+          }
+        } catch (e){}   // 取れなければ今の絵のまま。「◯分前」が育つので古さは伝わる
+      }
+    }
+
     // 雨雲を見ていない(雲画像だけを出している)ときは、レーダーの時刻一覧までは取りにいかない
     if (!$('radarShow').checked && !rainMotionAt) return;
     if (Date.now() - radarPolledAt < RADAR_POLL_MS) return;
@@ -3984,7 +4051,8 @@ function startRadarWatch(){
 
 // レーダーを消しても、読み取り結果が出ている間は見張りを続ける
 function stopRadarWatchIfIdle(){
-  if (rainMotionAt || $('radarShow').checked || $('satShow').checked) return;
+  if (rainMotionAt || $('radarShow').checked || $('satShow').checked
+      || $('riskFlood').checked) return;
   if (radarWatchTimer){ clearInterval(radarWatchTimer); radarWatchTimer = null; }
 }
 
@@ -5942,6 +6010,450 @@ async function updateHazardVerdict(){
 
 
 
+/* ================= 洪水キキクル(いまの河川の危険度) =================
+   想定区域が「いつか氾濫したら」の地図なのに対し、キキクルは「いま危ないか」の地図で、
+   逃げるかどうかの判断はこちらで決まる。内水の計算・想定区域と同じ地図に出せると、
+   「うちの前の川がいま何色か」を確かめるためにサイトを行き来しなくて済む。
+
+   気象庁は洪水キキクルをベクトルタイル(MVT)で配信している。ラスタではないので
+   L.tileLayer では描けず、外部ライブラリを足すとこの1ファイル完結が崩れる。
+   そこで、線と危険度だけを読む最小のデコーダをここに置いて canvas に自分で描く。
+
+   タイルの決まり(2026-09に実測):
+   ・偶数ズームだけ、z4〜z14。奇数ズームは配信されない
+   ・危険度が上がっている川しか入らない。平常時は0バイト、範囲外は404で返る
+   ・10分ごとに更新。時刻一覧は targetTimes.json(すべて実況。3時間先までの予測は
+     危険度の判定そのものに織り込まれているので、未来の時刻は配信されない) */
+const RISK_BASE  = 'https://www.jma.go.jp/bosai/jmatile/data/risk/';
+const RISK_MIN_Z = 4, RISK_MAX_Z = 14;   // flood の配信ズーム(偶数のみ)
+/* 国が管理する大きな川(庄内川・荒川など)は、川ごとの危険度(flood)とは別に
+   「水害リスクライン」で左岸・右岸それぞれの危険度が配信される。しかも flood のほうは
+   国管理河川に低い危険度しか持たせておらず、細かい判定はリスクラインにしか無い。
+   これを描かないと、大きな川が危険度5(災害切迫)になっていても地図に出ない。
+
+   配信は奇数ズームだけ(z11とz13。z12・z14は中身が空で返る)。z11より引くと、1枚の表示タイルを
+   覆うのに元タイルが4倍ずつ増えていくので、リスクラインで全ズームを賄うことはできない。
+   引いたときは下の「指定河川洪水予報」が大きな川の危険度を受け持つ。 */
+const RISKLINE_SRC_MIN_Z = 11, RISKLINE_MAX_SRC_Z = 13;
+
+/* 指定河川洪水予報。国管理河川を含む「川そのもの」の危険度で、キキクルと同じ2〜5の段階
+   (警戒レベル2〜5相当)を持つ。全国ぶんが1つのGeoJSON(数十KB)で配信されるタイルではない
+   データなので、どれだけ引いても取得量が増えない。
+   キキクルのタイルは引くと大きな川の危険度が抜け落ちる(細かい判定はz11以上の水害リスク
+   ラインにしか無い)ため、引いたときはこれが大きな川の危険度を示す主役になる。 */
+const RISK_RIVER_MIN_LV = 2;              // 2未満は「予報の対象だが警戒に至らず」
+const RISK_POLL_MS = 5*60*1000;          // 更新は10分ごと。取りこぼさない間隔で見にいく
+const RISK_LEVELS = {
+  1: {color:'#f2e700', name:'注意',     lv:'警戒レベル2相当'},
+  2: {color:'#ff2800', name:'警戒',     lv:'警戒レベル3相当'},
+  3: {color:'#aa00aa', name:'危険',     lv:'警戒レベル4相当'},
+  4: {color:'#0c000c', name:'災害切迫', lv:'警戒レベル5相当'}
+};
+
+/* --- ベクトルタイル(MVT)の最小デコーダ ---
+   仕様のうちここで要るのは「線の座標」と「属性」だけ。点・面や使わない値の型は読み飛ばす。
+   protobuf は「フィールド番号+型」の並びなので、知らない番号が増えても壊れない。 */
+const riskTextDecoder = new TextDecoder();
+function decodeMvtLines(bytes){
+  let pos = 0;
+  // 可変長整数。32bitを超える値も来るため、シフトではなく掛け算で積む
+  const varint = () => { let r = 0, s = 1, b;
+    do { b = bytes[pos++]; r += (b & 0x7f) * s; s *= 128; } while (b & 0x80);
+    return r; };
+  const zig  = u => (u >>> 1) ^ -(u & 1);        // 符号付きの詰め方(ジグザグ)をほどく
+  const str  = n => { const v = riskTextDecoder.decode(bytes.subarray(pos, pos + n)); pos += n; return v; };
+  // 読み飛ばし。pos += varint() と書くと足す前の pos が使われて位置がずれるので、
+  // 長さを受け取ってから進める
+  const skip = w => { if (w === 0) varint();
+                      else if (w === 2){ const n = varint(); pos += n; }
+                      else if (w === 5) pos += 4; else if (w === 1) pos += 8;
+                      else pos = bytes.length; };   // 未知の型は読み進められないので打ち切る
+
+  let extent = 4096;
+  const out = [];
+
+  const readValue = end => {            // 値は型ごとに別のフィールド番号を持つ
+    let v = null;
+    while (pos < end){
+      const key = varint(), f = key >> 3, w = key & 7;
+      if      (f === 1 && w === 2) v = str(varint());
+      else if ((f === 4 || f === 5) && w === 0) v = varint();
+      else if (f === 6 && w === 0) v = zig(varint());
+      else if (f === 7 && w === 0) v = !!varint();
+      else skip(w);
+    }
+    pos = end;
+    return v;
+  };
+
+  const readFeature = (end, keys, values) => {
+    let type = 0, tags = null, geom = null;
+    while (pos < end){
+      const key = varint(), f = key >> 3, w = key & 7;
+      if      (f === 3 && w === 0) type = varint();
+      else if (f === 2 && w === 2){ const n = varint(); tags = [pos, pos + n]; pos += n; }
+      else if (f === 4 && w === 2){ const n = varint(); geom = [pos, pos + n]; pos += n; }
+      else skip(w);
+    }
+    pos = end;
+    if (type !== 2 || !geom) return null;          // 2=線。川以外(点・面)は使わない
+    const props = {};
+    if (tags){
+      pos = tags[0];
+      while (pos < tags[1]){ const k = varint(), v = varint(); props[keys[k]] = values[v]; }
+    }
+    // ジオメトリはコマンド列。MoveTo(1)で線を始め、LineTo(2)で継ぎ足す。座標は前の点からの差分
+    const lines = [];
+    let x = 0, y = 0, line = null;
+    pos = geom[0];
+    while (pos < geom[1]){
+      const cmd = varint(), id = cmd & 7, count = cmd >> 3;
+      if (id !== 1 && id !== 2) break;              // ClosePath(7)は線には出てこない
+      for (let k = 0; k < count; k++){
+        x += zig(varint()); y += zig(varint());
+        if (id === 1){ line = [x, y]; lines.push(line); }
+        else if (line) line.push(x, y);
+      }
+    }
+    return lines.length ? {props, lines} : null;
+  };
+
+  const readLayer = end => {
+    const keys = [], values = [], feats = [];
+    while (pos < end){
+      const key = varint(), f = key >> 3, w = key & 7;
+      if      (f === 3 && w === 2) keys.push(str(varint()));
+      else if (f === 4 && w === 2){ const n = varint(); values.push(readValue(pos + n)); }
+      else if (f === 5 && w === 0) extent = varint();
+      else if (f === 2 && w === 2){ const n = varint(); feats.push([pos, pos + n]); pos += n; }
+      else skip(w);
+    }
+    // 属性表は地物より後ろに置かれることがあるので、レイヤーを読み切ってから地物を開く
+    for (const [a, b] of feats){ pos = a; const g = readFeature(b, keys, values); if (g) out.push(g); }
+    pos = end;
+  };
+
+  while (pos < bytes.length){
+    const key = varint(), f = key >> 3, w = key & 7;
+    if (f === 3 && w === 2){ const n = varint(); readLayer(pos + n); }
+    else skip(w);
+  }
+  return {extent, features: out};
+}
+
+/* タイル1枚。中身が無いとき(平常時)は0バイト、範囲外は404で返るので、
+   どちらも null を覚えて描かない。 */
+const riskTileCache = new Map();   // url -> Promise<{extent, features}|null>
+function riskTile(url){
+  if (riskTileCache.has(url)) return riskTileCache.get(url);
+  const p = fetch(url)
+    .then(r => r.ok ? r.arrayBuffer() : null)
+    .then(buf => (buf && buf.byteLength) ? decodeMvtLines(new Uint8Array(buf)) : null)
+    .catch(() => null);
+  riskTileCache.set(url, p);
+  return p;
+}
+
+/* 画面座標にした線([x0,y0,x1,y1,…]の配列)を描く。
+   引いた地図では短い区間が1px以下になって消える。危険度がいちばん高い区間ほど短いことが多く
+   (その区間だけ切迫している)、消えると「危険が無い」ように見えてしまうので、
+   線として見えない長さのものは同じ色の点に置き換えて必ず残す。
+   点は区間の位置を指すだけで、長さは表していない。 */
+const RISK_MIN_MARK_PX = 6;
+function paintPolylines(ctx, polys){
+  let len = 0;
+  ctx.beginPath();
+  for (const pts of polys){
+    ctx.moveTo(pts[0], pts[1]);
+    for (let i = 2; i < pts.length; i += 2){
+      len += Math.hypot(pts[i] - pts[i-2], pts[i+1] - pts[i-1]);
+      ctx.lineTo(pts[i], pts[i+1]);
+    }
+  }
+  ctx.stroke();
+  if (len >= RISK_MIN_MARK_PX || !polys.length) return;
+  ctx.beginPath();
+  ctx.arc(polys[0][0], polys[0][1], Math.max(ctx.lineWidth / 2, 3), 0, Math.PI * 2);
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.fill();
+}
+
+// タイル内座標(0〜extent)の地物を画面座標に直す
+function riskFeaturePolys(f, at, k){
+  return f.lines.map(line => {
+    const pts = new Array(line.length);
+    for (let i = 0; i < line.length; i += 2){
+      pts[i] = at.offX + line[i] * k; pts[i+1] = at.offY + line[i+1] * k;
+    }
+    return pts;
+  });
+}
+const paintRiskFeature = (ctx, f, at, k) => paintPolylines(ctx, riskFeaturePolys(f, at, k));
+
+/* 川ごとの危険度(洪水キキクル本体)。気象庁の描き分けに合わせ、ズームが深いほど線を太くし、
+   z8以上では灰色の縁取りを敷いて、薄い色でも背景地図から浮かせる。
+
+   z11以上で水害リスクラインが引けた範囲では、国管理河川の粗い線は描かない(本家と同じ。
+   同じ川に粗い線と細かい線が二重に出て、しかも危険度が食い違って見えるのを避ける)。
+   リスクラインが無い範囲では、大きな川が消えないよう粗い線をそのまま残す。 */
+function drawFloodTile(ctx, tile, z, at, haveRiskLine){
+  const k = at.span / tile.extent;
+  const w = z >= 10 ? Math.min(z - 7, 7) : 2;
+  const use = f => RISK_LEVELS[f.props.level] && !(haveRiskLine && f.props.type === 'nation');
+  ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
+  if (z >= 8){                                    // 縁取りは全部まとめて先に敷く
+    ctx.strokeStyle = '#b4b4b4'; ctx.lineWidth = w + 2;
+    for (const f of tile.features) if (use(f)) paintRiskFeature(ctx, f, at, k);
+  }
+  for (let lv = 1; lv <= 4; lv++){                // 危険度の高い線が上に来るよう低いほうから
+    ctx.strokeStyle = RISK_LEVELS[lv].color; ctx.lineWidth = w;
+    for (const f of tile.features) if (f.props.level === lv && use(f)) paintRiskFeature(ctx, f, at, k);
+  }
+}
+
+/* 水害リスクライン。国管理河川の左岸・右岸それぞれの危険度を、川の両脇に沿う2本の線で示す。
+   危険度の数値はキキクル本体と1つずれていて、2〜5がそのまま警戒レベル2〜5相当。
+   それ以外(-3など)は欠測・非表示区間なので、本家と同じく灰色で置く(「線はあるが判定が無い」
+   ことと「そもそも線が無い」ことを区別するため)。 */
+function drawRiskLineTile(ctx, tile, z, at){
+  const k = at.span / tile.extent;
+  // 気象庁と同じ太さ。引いたズームでは式が0以下になるので、線が消えない太さで止める
+  const base = Math.max(2, Math.min(2 + 2 * (z - RISKLINE_SRC_MIN_Z), 10));
+  const isRisk = lv => lv >= 2 && lv <= 5;
+  const width  = lv => lv === 5 ? base + 2 : base;      // 災害切迫だけ少し太い
+  // 引いたズームでは左岸・右岸の2本が接するので、縁取りを細くして塊にしない
+  const edge   = z >= RISKLINE_SRC_MIN_Z ? 2.5 : 1;
+  ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
+
+  for (const f of tile.features){                       // 縁取り
+    const lv = f.props.level;
+    ctx.strokeStyle = lv === 5 ? '#c4c4c4' : '#333333'; // 黒い線に黒を敷いても見えない
+    ctx.lineWidth   = width(lv) + (lv === 5 ? 0.5 : edge);
+    paintRiskFeature(ctx, f, at, k);
+  }
+  for (const g of [0, 2, 3, 4, 5]){                     // 0=欠測・非表示区間。危険な線ほど上に
+    for (const f of tile.features){
+      const lv = f.props.level;
+      if (g === 0 ? isRisk(lv) : lv !== g) continue;
+      ctx.strokeStyle = isRisk(lv) ? RISK_LEVELS[lv - 1].color : '#dddddd';
+      ctx.lineWidth   = width(lv);
+      paintRiskFeature(ctx, f, at, k);
+    }
+  }
+}
+
+/* 指定河川洪水予報。全国ぶんが1つのGeoJSONなので、時刻ごとに1回だけ取ればよい。 */
+const riskRiverCache = new Map();     // validtime -> Promise<[{level, type, lines:[[lng,lat],…]}]>
+function designatedRivers(t){
+  if (!riskRiverCache.has(t.validtime)){
+    riskRiverCache.set(t.validtime,
+      fetch(`${RISK_BASE}${t.basetime}/${t.member || 'none'}/${t.validtime}` +
+            `/surf/designated_river/data.geojson`)
+        .then(r => r.ok ? r.json() : null)
+        .then(g => (g && g.features ? g.features.map(f => ({
+            level: f.properties.level, type: f.properties.type,
+            name:  f.properties.fcstAreaNameJP,
+            lines: f.geometry.type === 'MultiLineString'
+                     ? f.geometry.coordinates : [f.geometry.coordinates]
+          })) : []))
+        .catch(() => []));
+  }
+  return riskRiverCache.get(t.validtime);
+}
+
+/* 指定河川洪水予報を、キキクルと同じ色で川に沿って描く。
+   z11以上では国管理河川を描かない。そこは左岸・右岸別の水害リスクラインのほうが細かく、
+   同じ川に太い線を重ねるとリスクラインが読めなくなるため(本家と同じ切り替え)。 */
+function drawDesignatedRivers(ctx, rivers, z, coords, size){
+  const w = Math.min(Math.max(z - 2, 2), 8);
+  const ox = coords.x * size.x, oy = coords.y * size.y;
+  const margin = w + 8;
+  ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
+
+  const paint = (r, casing) => {
+    const lv = r.level;
+    const risky = lv >= RISK_RIVER_MIN_LV && lv <= 5;
+    ctx.strokeStyle = casing ? (lv === 5 ? '#c4c4c4' : '#333333')
+                             : (risky ? RISK_LEVELS[lv - 1].color : '#80ffff');
+    ctx.lineWidth   = casing ? w + 2.5 : w;
+    for (const line of r.lines){
+      const pts = new Array(line.length * 2);
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (let i = 0; i < line.length; i++){
+        const x = lngToX(line[i][0], z) - ox, y = latToY(line[i][1], z) - oy;
+        pts[i*2] = x; pts[i*2+1] = y;
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+      }
+      if (maxX < -margin || maxY < -margin || minX > size.x + margin || minY > size.y + margin)
+        continue;                       // このタイルに掛からない川は描かない
+      paintPolylines(ctx, [pts]);
+    }
+  };
+
+  const shown = rivers.filter(r => !(z >= RISKLINE_SRC_MIN_Z && r.type === 'nation'));
+  for (const r of shown) paint(r, true);                       // 縁取りを先に敷く
+  for (const lv of [0, 2, 3, 4, 5])                            // 危険な川ほど上に
+    for (const r of shown)
+      if (lv === 0 ? !(r.level >= RISK_RIVER_MIN_LV && r.level <= 5) : r.level === lv)
+        paint(r, false);
+}
+
+/* 一度読んだ「危険」以上のリスクライン区間は、位置だけ覚えておく。
+   リスクラインを取りにいかない引いたズームでも、いちばん危ない場所が地図から消えないよう
+   点で残すため。通信は増えない(すでに読んだタイルから拾うだけ)。 */
+let riskHighMarks = [];               // [{lat, lng, level}]
+const riskHighSeen = new Set();       // 同じ区間を何度も積まないための区間ID
+function rememberHighRisk(tile, at){
+  const n = Math.pow(2, at.srcZ);
+  for (const f of tile.features){
+    const lv = f.props.level;
+    if (!(lv >= 4) || riskHighSeen.has(f.props.id)) continue;
+    riskHighSeen.add(f.props.id);
+    const wx = (at.sx + f.lines[0][0] / tile.extent) / n;
+    const wy = (at.sy + f.lines[0][1] / tile.extent) / n;
+    riskHighMarks.push({
+      lat: 180 / Math.PI * Math.atan(Math.sinh(Math.PI * (1 - 2 * wy))),
+      lng: wx * 360 - 180, level: lv});
+  }
+}
+
+function drawHighRiskMarks(ctx, z, coords, size){
+  const ox = coords.x * size.x, oy = coords.y * size.y;
+  for (const m of riskHighMarks){
+    const x = lngToX(m.lng, z) - ox, y = latToY(m.lat, z) - oy;
+    if (x < -8 || y < -8 || x > size.x + 8 || y > size.y + 8) continue;
+    ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#333333'; ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = RISK_LEVELS[m.level - 1].color; ctx.fill();
+  }
+}
+
+/* 配信が無いズーム(flood は奇数、リスクラインは偶数、どちらも上限より深いズーム)は、
+   配信されている一番近い下のズームのタイルを引き伸ばして描く。
+   ベクトルなので、拡大しても線がぼやけない。 */
+const JmaRiskLayer = L.GridLayer.extend({
+  createTile(coords, done){
+    const size = this.getTileSize();
+    const tile = L.DomUtil.create('canvas', 'leaflet-tile');
+    tile.width = size.x; tile.height = size.y;
+    const z = coords.z;
+    if (z < RISK_MIN_Z || !riskTime){ setTimeout(() => done(null, tile), 0); return tile; }
+
+    // 元タイルが画面上のどこに、どれだけの大きさで載るか
+    const place = srcZ => {
+      const scale = Math.pow(2, z - srcZ);
+      const sx = Math.floor(coords.x / scale), sy = Math.floor(coords.y / scale);
+      return {srcZ, sx, sy, span: size.x * scale,
+              offX: -(coords.x - sx * scale) * size.x,
+              offY: -(coords.y - sy * scale) * size.y};
+    };
+    const t = riskTime;
+    const fetchAt = (el, at) => riskTile(
+      `${RISK_BASE}${t.basetime}/${t.member || 'none'}/${t.validtime}` +
+      `/surf/${el}/${at.srcZ}/${at.sx}/${at.sy}.pbf`);
+
+    const floodAt = place(Math.min(RISK_MAX_Z, z - (z % 2)));
+    const lineAt  = z >= RISKLINE_SRC_MIN_Z          // リスクラインは奇数ズームのみ
+      ? place(Math.min(RISKLINE_MAX_SRC_Z, z % 2 ? z : z - 1)) : null;
+
+    Promise.all([fetchAt('flood', floodAt),
+                 lineAt ? fetchAt('flood_riskline', lineAt) : null,
+                 designatedRivers(t)]).then(([flood, line, rivers]) => {
+      if (riskTime === t){
+        const ctx = tile.getContext('2d');
+        const haveLine = !!(line && line.features.length);
+        if (haveLine) rememberHighRisk(line, lineAt);
+        // z11以上でリスクラインが引けた範囲は、国管理河川の粗い線を本家と同じく隠す
+        if (flood) drawFloodTile(ctx, flood, z, floodAt, haveLine);
+        if (haveLine) drawRiskLineTile(ctx, line, z, lineAt);
+        // 引いたズームでは、大きな川の危険度は指定河川洪水予報と、覚えている点で示す
+        if (!lineAt) drawHighRiskMarks(ctx, z, coords, size);
+        if (rivers && rivers.length) drawDesignatedRivers(ctx, rivers, z, coords, size);
+      }
+      done(null, tile);
+    });
+    return tile;
+  }
+});
+
+let riskLayer = null;
+let riskTime  = null;    // {basetime, member, validtime}
+let riskPolledAt = 0;
+let riskReqId = 0;
+
+// 一覧は新しい順に並んでいるが、順序に頼らず一番新しい時刻を選ぶ
+async function fetchRiskTime(){
+  const j = await fetch(RISK_BASE + 'targetTimes.json').then(r => r.json());
+  return j.slice().sort((a, b) =>
+    (a.basetime + a.validtime).localeCompare(b.basetime + b.validtime)).pop();
+}
+
+function updateRiskStamp(){
+  const stamp = $('riskStamp');
+  if (!$('riskFlood').checked || !riskTime){ stamp.hidden = true; return; }
+  stamp.hidden = false;
+  $('riskStampTime').textContent = `洪水キキクル ${fmtRadarTime(riskTime.validtime)}`;
+  $('riskStampAge').textContent  = `現在（${radarAgeText(riskTime.validtime)}）`;
+}
+
+function updateRiskStatus(){
+  $('riskStatus').innerHTML = riskTime
+    ? `表示中: <b>${fmtRadarTime(riskTime.validtime)}</b> 時点の危険度` +
+      `（${radarAgeText(riskTime.validtime)}）。新しい判定が出たら自動で入れ替わります。`
+    : '';
+}
+
+async function updateRiskLayer(){
+  const req = ++riskReqId;
+  if (!$('riskFlood').checked){
+    if (riskLayer){ map.removeLayer(riskLayer); riskLayer = null; }
+    riskTime = null;
+    riskTileCache.clear();
+    riskRiverCache.clear();
+    riskHighMarks = []; riskHighSeen.clear();
+    $('riskStatus').textContent = '';
+    updateRiskStamp(); updateLegend(); stopRadarWatchIfIdle();
+    return;
+  }
+
+  $('riskStatus').textContent = '洪水キキクルの最新時刻を取得しています…';
+  updateLegend();
+  let t;
+  try { t = await fetchRiskTime(); }
+  catch (e){
+    if (req !== riskReqId) return;
+    setStatus('洪水キキクルを取得できませんでした: ' + e.message, true);
+    $('riskFlood').checked = false;
+    updateRiskLayer();
+    return;
+  }
+  if (req !== riskReqId || !$('riskFlood').checked) return;
+
+  if (!riskTime || riskTime.validtime !== t.validtime){
+    riskTileCache.clear();
+    riskRiverCache.clear();
+    riskHighMarks = []; riskHighSeen.clear();   // 古い判定の点を残さない
+  }
+  riskTime = t;
+  riskPolledAt = Date.now();
+  if (!riskLayer){
+    riskLayer = new JmaRiskLayer({
+      maxZoom: 18,
+      attribution: "<a href='https://www.jma.go.jp/bosai/risk/' target='_blank'>気象庁キキクル</a>"
+    }).addTo(map);
+  } else {
+    riskLayer.redraw();
+  }
+  bringWeatherLayersToFront();      // 想定区域の上・雨雲の下に置く
+  startRadarWatch();                // 「◯分前」を進め、新しい判定に自動で追いつくための見張り
+  updateRiskStamp(); updateRiskStatus(); updateLegend();
+}
+
+$('riskFlood').addEventListener('change', updateRiskLayer);
+
+
 /* ================= 降水短時間予報とリードタイム =================
    ナウキャストは1時間先までしか無く、「前日〜数時間前の備え」には届かない。
    気象庁の降水短時間予報（rasrf）は最大15時間先まであるので、こちらを取り込み、
@@ -6818,7 +7330,7 @@ const SETTING_IDS = ['baseMap','rrim','rrimOp','radarShow','radarOp',
   'terrainViz','vizGain',
   'tex3d','texRes','exag3d','rainRate','rainDur','sewerPreset','sewerRate','sewerStore',
   'surfacePreset','infilRate','flowSmooth','edgeDrain','simSpeed',
-  'hzFlood','hzHightide','hzKaoku','hzKeizoku','hzOp','showFlowDir',
+  'hzFlood','hzHightide','hzKaoku','hzKeizoku','hzOp','riskFlood','showFlowDir',
   // pfFloor は「次に登録する地点の既定値」なので設定として持つ。
   // placeFloor は選択中の地点の属性なので、地点側(floorCm)にだけ持たせる。
   'pfFloor'];
@@ -6871,6 +7383,7 @@ function restoreSettings(){
   if ($('rrim').checked) $('rrim').dispatchEvent(new Event('change'));
   if ($('radarShow').checked) $('radarShow').dispatchEvent(new Event('change'));
   if ($('satShow').checked) $('satShow').dispatchEvent(new Event('change'));
+  if ($('riskFlood').checked) $('riskFlood').dispatchEvent(new Event('change'));
   return saved;
 }
 
